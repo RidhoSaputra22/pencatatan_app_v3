@@ -1,0 +1,14 @@
+[
+  {
+    "type": "sqlite",
+    "path": "d:\\APLIKASI LARAVEL\\visitor-monitoring-mvp-yolov5\\backend\\visitors.db"
+  },
+  {
+    "type": "sqlite",
+    "path": "c:\\APLIKASI JACK\\New-folder\\backend\\visitors.db"
+  },
+  {
+    "type": "sqlite",
+    "path": "/home/codeslayer/Desktop/PROJECT LARAVEL/2026_31_si_pencatatan_pengunjung_YOLO/pencatatan_app_v2/backend/visitors.db"
+  }
+]

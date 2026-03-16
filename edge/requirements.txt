@@ -1,0 +1,34 @@
+# Core dependencies
+requests
+python-dotenv
+numpy
+opencv-python-headless
+flask
+flask-cors
+
+# YOLOv5 (install torch manually if needed)
+torch
+torchvision
+
+ultralytics
+pandas
+tqdm
+seaborn
+requests
+# DeepSORT with ReID
+deep-sort-realtime
+scipy
+
+# Employee face recognition.
+# InsightFace currently installs reliably on Python <= 3.12 in this project.
+# On Python 3.13 pip will skip these packages, and employee face filtering
+# will stay disabled until you recreate the venv with Python 3.12.
+insightface; python_version < "3.13"
+onnxruntime; python_version < "3.13"
+
+# Pin setuptools <75 — v82+ removed pkg_resources which deep-sort-realtime needs
+setuptools<75
+
+# Intel GPU (Iris Xe) support - optional
+# Install via: pip install intel-extension-for-pytorch
+# intel-extension-for-pytorch

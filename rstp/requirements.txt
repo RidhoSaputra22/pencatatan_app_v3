@@ -1,0 +1,6 @@
+opencv-python
+flask
+vidgear
+numpy
+pyzmq
+simplejpeg
