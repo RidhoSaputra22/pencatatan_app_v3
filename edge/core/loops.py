@@ -13,18 +13,20 @@ from .api_client import (
     login_token,
     send_visitor_event,
 )
+from .capture import LatestFrameCapture
 from .config import (
     CAMERA_ID,
     CONFIG_REFRESH,
     EDGE_STREAM_URL,
     IMG_SIZE,
+    TRACK_CONFIRM_FRAMES,
     TRACK_MAX_DISAPPEARED,
     TRACK_MAX_DISTANCE,
 )
 from .detection import load_yolov5_model, parse_roi, point_in_roi
 from .face_recognition import EmployeeFaceRecognizer
 from .reid import cleanup_old_tracks, reset_daily_cache, update_track_embedding
-from .streaming import update_latest_frame
+from .streaming import has_raw_stream_clients, update_latest_frame
 from .tracker import CentroidTracker, DEEPSORT_AVAILABLE, DeepSORTTracker
 from .visualization import draw_bounding_boxes, draw_info_overlay, draw_roi_polygon
 
@@ -32,28 +34,6 @@ from .visualization import draw_bounding_boxes, draw_info_overlay, draw_roi_poly
 FRAME_W = 1280
 FRAME_H = 720
 EVENT_COOLDOWN = 10.0
-
-
-def _open_capture(url: str):
-    """
-    Open video capture.
-    Supports webcam index, HTTP stream, and RTSP stream.
-    """
-    if url.isdigit():
-        idx = int(url)
-        print(f"[edge] Opening webcam index {idx} directly (no RTSP server needed)")
-        for backend in [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]:
-            capture = cv2.VideoCapture(idx, backend)
-            if capture.isOpened():
-                print(f"[edge] Webcam opened with backend: {backend}")
-                capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                return capture
-        capture = cv2.VideoCapture(idx)
-    else:
-        capture = cv2.VideoCapture(url)
-
-    capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    return capture
 
 
 def _stable_identity_key(fallback_key: str, classification: Dict[str, Any]) -> str:
@@ -104,7 +84,7 @@ def real_loop():
     if DEEPSORT_AVAILABLE:
         tracker = DeepSORTTracker(
             max_age=TRACK_MAX_DISAPPEARED,
-            n_init=3,
+            n_init=TRACK_CONFIRM_FRAMES,
             max_cosine_distance=0.3,
         )
     else:
@@ -121,6 +101,8 @@ def real_loop():
     current_date = ""
     last_event_time: Dict[str, float] = {}
     cap = None
+    cap_source = ""
+    last_frame_id = 0
 
     while True:
         now_ts = time.time()
@@ -171,26 +153,32 @@ def real_loop():
             time.sleep(5)
             continue
 
+        if cap_source != stream_url and cap is not None:
+            print(f"[edge] Stream source changed -> reconnecting to {stream_url}")
+            cap.release()
+            cap = None
+            cap_source = ""
+            last_frame_id = 0
+
         if cap is None or not cap.isOpened():
-            cap = _open_capture(stream_url)
-            if not cap.isOpened():
+            cap = LatestFrameCapture(stream_url)
+            if not cap.start():
                 print("[edge] Failed to open stream. Retrying...")
-                try:
-                    cap.release()
-                except Exception:
-                    pass
                 cap = None
+                cap_source = ""
                 time.sleep(3)
                 continue
+            cap_source = stream_url
+            last_frame_id = 0
 
-        ok, frame = cap.read()
+        ok, frame, last_frame_id = cap.read(last_frame_id=last_frame_id, timeout=1.0)
         if not ok or frame is None:
             print("[edge] Frame read failed. Reconnecting...")
-            try:
+            if cap is not None:
                 cap.release()
-            except Exception:
-                pass
             cap = None
+            cap_source = ""
+            last_frame_id = 0
             time.sleep(1)
             continue
 
@@ -361,7 +349,7 @@ def real_loop():
             visitor_states[track_id] = state
             track.in_roi = in_roi_now
 
-        raw_frame = display_frame.copy()
+        raw_frame = display_frame.copy() if has_raw_stream_clients() else None
         draw_roi_polygon(display_frame, roi)
         draw_bounding_boxes(display_frame, tracks, visitor_states)
 

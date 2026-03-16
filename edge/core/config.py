@@ -13,6 +13,17 @@ def env(name: str, default: str = "") -> str:
     return os.getenv(name, default)
 
 
+def env_int(name: str, default: int) -> int:
+    """Parse integer environment variables safely."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw.strip())
+    except (TypeError, ValueError):
+        return default
+
+
 def env_bool(name: str, default: bool = False) -> bool:
     """Parse bool-like environment variable values."""
     raw = os.getenv(name)
@@ -31,7 +42,9 @@ CONFIG_REFRESH = int(env("EDGE_CONFIG_REFRESH_SECONDS", "30"))
 
 # Stream configuration
 EDGE_STREAM_URL = env("EDGE_STREAM_URL", "").strip()
-EDGE_STREAM_PORT = int(env("EDGE_STREAM_PORT", "5000"))
+EDGE_STREAM_PORT = env_int("EDGE_STREAM_PORT", 5000)
+EDGE_STREAM_JPEG_QUALITY = max(50, min(95, env_int("EDGE_STREAM_JPEG_QUALITY", 80)))
+EDGE_STREAM_MAX_FPS = max(0, env_int("EDGE_STREAM_MAX_FPS", 0))
 
 # YOLOv5 configuration
 CONF_TH = float(env("YOLOV5_CONF", "0.35"))
@@ -45,6 +58,7 @@ REPO = env("YOLOV5_REPO", "").strip()
 # Tracking configuration
 TRACK_MAX_DISAPPEARED = int(env("TRACK_MAX_DISAPPEARED", "20"))
 TRACK_MAX_DISTANCE = float(env("TRACK_MAX_DISTANCE", "80"))
+TRACK_CONFIRM_FRAMES = max(1, env_int("TRACK_CONFIRM_FRAMES", 1))
 
 # Face recognition configuration
 FACE_RECOGNITION_ENABLED = env_bool("FACE_RECOGNITION_ENABLED", True)

@@ -16,14 +16,23 @@ import threading
 from flask import Flask, Response, jsonify
 from flask_cors import CORS
 
-from .config import EDGE_STREAM_PORT, EDGE_STREAM_URL
+from .config import (
+    EDGE_STREAM_JPEG_QUALITY,
+    EDGE_STREAM_MAX_FPS,
+    EDGE_STREAM_PORT,
+    EDGE_STREAM_URL,
+)
 
 # Global variable for sharing latest frame with stream server
 latest_frame = None        # processed frame (with ROI, bboxes, info overlay)
 latest_frame_raw = None     # raw frame (no overlay) for ROI editor
 frame_lock = threading.Lock()
+frame_condition = threading.Condition(frame_lock)
 _frame_count = 0
 _last_frame_time = 0.0
+_frame_version = 0
+_processed_clients = 0
+_raw_clients = 0
 
 # Flask app for streaming
 flask_app = Flask(__name__)
@@ -44,45 +53,89 @@ def gen_frames(raw=False):
     import cv2
     label = "raw" if raw else "processed"
     print(f"[stream] Client connected to video feed ({label})")
-    while True:
-        with frame_lock:
+    target_interval = 1.0 / EDGE_STREAM_MAX_FPS if EDGE_STREAM_MAX_FPS > 0 else 0.0
+    next_send_at = 0.0
+    last_version = -1
+
+    global _processed_clients, _raw_clients
+    with frame_condition:
+        if raw:
+            _raw_clients += 1
+        else:
+            _processed_clients += 1
+
+    try:
+        while True:
+            with frame_condition:
+                frame_condition.wait_for(
+                    lambda: (
+                        (latest_frame_raw if raw else latest_frame) is not None
+                        and _frame_version != last_version
+                    ),
+                    timeout=1.0,
+                )
+                frame = latest_frame_raw if raw else latest_frame
+                version = _frame_version
+
+            if frame is None or version == last_version:
+                continue
+
+            if target_interval > 0.0:
+                now = time.monotonic()
+                if next_send_at > now:
+                    time.sleep(next_send_at - now)
+                next_send_at = max(next_send_at, time.monotonic()) + target_interval
+
+            ret, buffer = cv2.imencode(
+                ".jpg",
+                frame,
+                [cv2.IMWRITE_JPEG_QUALITY, EDGE_STREAM_JPEG_QUALITY],
+            )
+            if not ret:
+                last_version = version
+                continue
+
+            last_version = version
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
+            )
+    finally:
+        with frame_condition:
             if raw:
-                frame = latest_frame_raw.copy() if latest_frame_raw is not None else None
+                _raw_clients = max(0, _raw_clients - 1)
             else:
-                frame = latest_frame.copy() if latest_frame is not None else None
-
-        if frame is None:
-            time.sleep(0.05)
-            continue
-
-        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        if not ret:
-            continue
-
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-
-        # ~25 fps max to save bandwidth
-        time.sleep(0.04)
+                _processed_clients = max(0, _processed_clients - 1)
+        print(f"[stream] Client disconnected from video feed ({label})")
 
 
 @flask_app.route('/video_feed')
 def video_feed():
     """MJPEG stream endpoint — frame sudah diproses YOLO+tracking"""
-    response = Response(gen_frames(raw=False),
-                        mimetype='multipart/x-mixed-replace; boundary=frame')
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response = Response(
+        gen_frames(raw=False),
+        mimetype="multipart/x-mixed-replace; boundary=frame",
+    )
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    response.headers["X-Accel-Buffering"] = "no"
     return response
 
 
 @flask_app.route('/video_feed_raw')
 def video_feed_raw():
     """MJPEG stream endpoint — frame TANPA overlay (untuk ROI editor)"""
-    response = Response(gen_frames(raw=True),
-                        mimetype='multipart/x-mixed-replace; boundary=frame')
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response = Response(
+        gen_frames(raw=True),
+        mimetype="multipart/x-mixed-replace; boundary=frame",
+    )
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    response.headers["X-Accel-Buffering"] = "no"
     return response
 
 
@@ -91,11 +144,17 @@ def health():
     """Health check endpoint untuk frontend"""
     global _frame_count, _last_frame_time
     has_frame = latest_frame is not None
+    age_ms = int(max(0.0, time.time() - _last_frame_time) * 1000) if has_frame else None
     return jsonify({
-        'status': 'ok' if has_frame else 'waiting',
-        'camera_source': EDGE_STREAM_URL or 'not configured',
-        'has_frame': has_frame,
-        'stream_endpoint': '/video_feed',
+        "status": "ok" if has_frame else "waiting",
+        "camera_source": EDGE_STREAM_URL or "not configured",
+        "has_frame": has_frame,
+        "stream_endpoint": "/video_feed",
+        "frame_age_ms": age_ms,
+        "jpeg_quality": EDGE_STREAM_JPEG_QUALITY,
+        "max_fps": EDGE_STREAM_MAX_FPS or "worker-rate",
+        "processed_clients": _processed_clients,
+        "raw_clients": _raw_clients,
     })
 
 
@@ -114,7 +173,13 @@ def handle_options():
 def start_flask_server():
     """Start Flask server in background thread"""
     print(f"[stream] Starting processed video server on http://0.0.0.0:{EDGE_STREAM_PORT}/video_feed")
-    flask_app.run(host='0.0.0.0', port=EDGE_STREAM_PORT, threaded=True, debug=False)
+    flask_app.run(
+        host="0.0.0.0",
+        port=EDGE_STREAM_PORT,
+        threaded=True,
+        debug=False,
+        use_reloader=False,
+    )
 
 
 def update_latest_frame(frame, raw_frame=None):
@@ -124,10 +189,18 @@ def update_latest_frame(frame, raw_frame=None):
         frame: Processed frame with ROI, bboxes, info overlay
         raw_frame: Raw frame without any overlay (for ROI editor)
     """
-    global latest_frame, latest_frame_raw, _frame_count, _last_frame_time
-    with frame_lock:
-        latest_frame = frame.copy()
+    global latest_frame, latest_frame_raw, _frame_count, _last_frame_time, _frame_version
+    with frame_condition:
+        latest_frame = frame
         if raw_frame is not None:
-            latest_frame_raw = raw_frame.copy()
+            latest_frame_raw = raw_frame
         _frame_count += 1
         _last_frame_time = time.time()
+        _frame_version += 1
+        frame_condition.notify_all()
+
+
+def has_raw_stream_clients() -> bool:
+    """Return whether the raw feed currently has any connected clients."""
+    with frame_lock:
+        return _raw_clients > 0

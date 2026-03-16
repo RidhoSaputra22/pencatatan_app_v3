@@ -1,11 +1,19 @@
-from pydantic_settings import BaseSettings
+from pathlib import Path
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List, Optional
 import os
 
 # Get base directory for SQLite database
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_DIR = Path(BASE_DIR).parent
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=str(PROJECT_DIR / ".env"),
+        case_sensitive=False,
+        extra="ignore",
+    )
+
     app_env: str = "dev"
 
     jwt_secret: str = "change-me-in-production"
@@ -30,9 +38,5 @@ class Settings(BaseSettings):
 
     def cors_list(self) -> List[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
 
 settings = Settings()
