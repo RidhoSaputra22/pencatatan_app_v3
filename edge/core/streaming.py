@@ -17,6 +17,8 @@ from flask import Flask, Response, jsonify
 from flask_cors import CORS
 
 from .config import (
+    EDGE_STREAM_ALLOW_ORIGIN,
+    EDGE_STREAM_HOST,
     EDGE_STREAM_JPEG_QUALITY,
     EDGE_STREAM_MAX_FPS,
     EDGE_STREAM_PORT,
@@ -38,7 +40,7 @@ _raw_clients = 0
 flask_app = Flask(__name__)
 CORS(flask_app, resources={
     r"/*": {
-        "origins": "*",
+        "origins": EDGE_STREAM_ALLOW_ORIGIN,
         "methods": ["GET", "POST", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
         "expose_headers": ["Content-Type"],
@@ -116,7 +118,7 @@ def video_feed():
         gen_frames(raw=False),
         mimetype="multipart/x-mixed-replace; boundary=frame",
     )
-    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Origin"] = EDGE_STREAM_ALLOW_ORIGIN
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
@@ -131,7 +133,7 @@ def video_feed_raw():
         gen_frames(raw=True),
         mimetype="multipart/x-mixed-replace; boundary=frame",
     )
-    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Origin"] = EDGE_STREAM_ALLOW_ORIGIN
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
@@ -164,7 +166,7 @@ def health():
 def handle_options():
     """Handle CORS preflight requests"""
     response = flask_app.make_default_options_response()
-    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Origin'] = EDGE_STREAM_ALLOW_ORIGIN
     response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
     return response
@@ -172,9 +174,12 @@ def handle_options():
 
 def start_flask_server():
     """Start Flask server in background thread"""
-    print(f"[stream] Starting processed video server on http://0.0.0.0:{EDGE_STREAM_PORT}/video_feed")
+    print(
+        f"[stream] Starting processed video server on "
+        f"http://{EDGE_STREAM_HOST}:{EDGE_STREAM_PORT}/video_feed"
+    )
     flask_app.run(
-        host="0.0.0.0",
+        host=EDGE_STREAM_HOST,
         port=EDGE_STREAM_PORT,
         threaded=True,
         debug=False,

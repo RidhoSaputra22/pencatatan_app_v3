@@ -5,14 +5,64 @@ from pathlib import Path
 
 import cv2
 from flask import Flask, Response, jsonify
+from dotenv import load_dotenv
 
 app = Flask(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
-SOURCE_VALUE = os.getenv("RTSP_SOURCE", "cctv-footage-1.mp4").strip()
-SERVER_PORT = int(os.getenv("RTSP_SERVER_PORT", "7000"))
-JPEG_QUALITY = max(50, min(95, int(os.getenv("RTSP_JPEG_QUALITY", "75"))))
-TARGET_FPS = float(os.getenv("RTSP_TARGET_FPS", "0") or "0")
+PROJECT_DIR = BASE_DIR.parent
+
+load_dotenv(PROJECT_DIR / ".env")
+
+
+def env_required(name: str) -> str:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return raw.strip()
+
+
+def env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw.strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def env_int_required(name: str) -> int:
+    raw = env_required(name)
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"Environment variable {name} must be an integer") from exc
+
+
+def env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw.strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def env_float_required(name: str) -> float:
+    raw = env_required(name)
+    try:
+        return float(raw)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"Environment variable {name} must be a float") from exc
+
+
+SOURCE_VALUE = env_required("RTSP_SOURCE")
+SERVER_HOST = env_required("RTSP_SERVER_HOST")
+SERVER_PORT = env_int_required("RTSP_SERVER_PORT")
+JPEG_QUALITY = max(50, min(95, env_int_required("RTSP_JPEG_QUALITY")))
+TARGET_FPS = env_float_required("RTSP_TARGET_FPS")
 
 _latest_frame = None
 _latest_jpeg = None
@@ -175,4 +225,10 @@ def video():
 if __name__ == "__main__":
     reader_thread = threading.Thread(target=_reader_loop, daemon=True)
     reader_thread.start()
-    app.run(host="0.0.0.0", port=SERVER_PORT, debug=False, threaded=True, use_reloader=False)
+    app.run(
+        host=SERVER_HOST,
+        port=SERVER_PORT,
+        debug=False,
+        threaded=True,
+        use_reloader=False,
+    )

@@ -12,8 +12,8 @@ export default function LoginPage() {
   const router = useRouter();
   const { login: authLogin } = useAuth();
 
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("admin123");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -56,8 +56,6 @@ export default function LoginPage() {
           </Button>
           {err && <Alert variant="error">{err}</Alert>}
         </form>
-
-        <p className="text-center text-xs opacity-50 mt-5">Default: admin / admin123</p>
       </div>
     </div>
   );

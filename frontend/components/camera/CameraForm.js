@@ -114,13 +114,13 @@ export default function CameraForm({ camera, onSaved }) {
           label="Nama Kamera"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Kamera Utama"
+          placeholder="Masukkan nama kamera"
         />
         <Input
           label="Lokasi"
           value={location}
           onChange={(e) => setLocation(e.target.value)}
-          placeholder="Pintu Masuk Utama"
+          placeholder="Masukkan lokasi kamera"
         />
 
         {/* Stream URL + Find Cameras */}

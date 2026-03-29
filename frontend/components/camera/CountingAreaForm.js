@@ -26,7 +26,7 @@ const DEFAULT_ROI = [
  * Uses the interactive RoiEditor with live camera feed.
  */
 export default function CountingAreaForm({ areas = [], onSaved }) {
-  const [areaName, setAreaName] = useState("Gate Masuk");
+  const [areaName, setAreaName] = useState("");
   const [roiPoints, setRoiPoints] = useState(DEFAULT_ROI);
   const [directionMode, setDirectionMode] = useState("BOTH");
   const [saving, setSaving] = useState(false);
@@ -114,7 +114,7 @@ export default function CountingAreaForm({ areas = [], onSaved }) {
             label="Nama Area"
             value={areaName}
             onChange={(e) => setAreaName(e.target.value)}
-            placeholder="Gate Masuk"
+            placeholder="Masukkan nama area"
           />
           <Select
             label="Direction Mode"

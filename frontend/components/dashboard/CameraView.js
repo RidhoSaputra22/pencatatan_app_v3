@@ -1,7 +1,11 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { STREAM_URL, STREAM_HEALTH_INTERVAL } from "@/lib/constants";
+import {
+  STREAM_HEALTH_INTERVAL,
+  STREAM_HEALTH_URL,
+  STREAM_URL,
+} from "@/lib/constants";
 import Button from "@/components/ui/Button";
 import Alert from "@/components/ui/Alert";
 import Section from "@/components/ui/Section";
@@ -14,12 +18,10 @@ export default function CameraView() {
   const [loading, setLoading] = useState(true);
   const imgRef = useRef(null);
 
-  const healthUrl = STREAM_URL.replace(/\/video_feed$/, "/health");
-
   useEffect(() => {
     const checkStream = async () => {
       try {
-        const response = await fetch(healthUrl);
+        const response = await fetch(STREAM_HEALTH_URL);
         if (response.ok) {
           const data = await response.json();
           if (data.status === "ok") {
@@ -42,7 +44,7 @@ export default function CameraView() {
     checkStream();
     const interval = setInterval(checkStream, STREAM_HEALTH_INTERVAL);
     return () => clearInterval(interval);
-  }, [healthUrl]);
+  }, []);
 
   const handleImageError = () => {
     setError(

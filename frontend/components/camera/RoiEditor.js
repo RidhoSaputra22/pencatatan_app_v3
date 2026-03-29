@@ -1,7 +1,11 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { STREAM_URL, STREAM_RAW_URL } from "@/lib/constants";
+import {
+  STREAM_HEALTH_INTERVAL,
+  STREAM_HEALTH_URL,
+  STREAM_RAW_URL,
+} from "@/lib/constants";
 
 /**
  * Default canvas size (matches typical YOLO frame: 1280×720).
@@ -72,11 +76,10 @@ export default function RoiEditor({ points = [], onChange }) {
 
   /* ───────── Stream health check ───────── */
   useEffect(() => {
-    const healthUrl = STREAM_URL.replace(/\/video_feed$/, "/health");
     let timer;
     const check = async () => {
       try {
-        const r = await fetch(healthUrl);
+        const r = await fetch(STREAM_HEALTH_URL);
         if (r.ok) setStreamOk(true);
         else setStreamOk(false);
       } catch {
@@ -84,7 +87,7 @@ export default function RoiEditor({ points = [], onChange }) {
       }
     };
     check();
-    timer = setInterval(check, 8000);
+    timer = setInterval(check, STREAM_HEALTH_INTERVAL);
     return () => clearInterval(timer);
   }, []);
 

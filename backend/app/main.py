@@ -212,9 +212,9 @@ def on_startup():
             # Create default counting area
             area = CountingArea(
                 camera_id=cam.camera_id,
-                name="Gate Masuk",
-                roi_polygon=[[50, 50], [1230, 50], [1230, 670], [50, 670]],
-                direction_mode="BOTH",
+                name=settings.default_area_name,
+                roi_polygon=settings.default_area_roi(),
+                direction_mode=settings.default_area_direction_mode,
                 is_active=True,
             )
             session.add(area)

@@ -2,12 +2,34 @@
  * Application constants
  */
 
+function parsePositiveInt(value) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function joinUrl(base, pathname) {
+  if (!base) {
+    return pathname;
+  }
+
+  try {
+    return new URL(pathname, base.endsWith("/") ? base : `${base}/`).toString();
+  } catch {
+    return `${base.replace(/\/+$/, "")}${pathname}`;
+  }
+}
+
 // API Configuration
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "";
+export const EDGE_PUBLIC_BASE_URL = process.env.NEXT_PUBLIC_EDGE_PUBLIC_BASE_URL || "";
 
 // Edge worker streaming endpoints
-export const STREAM_URL = process.env.NEXT_PUBLIC_STREAM_URL || "http://localhost:5000/video_feed";
-export const STREAM_RAW_URL = process.env.NEXT_PUBLIC_STREAM_RAW_URL || "http://localhost:5000/video_feed_raw";
+export const STREAM_URL =
+  process.env.NEXT_PUBLIC_STREAM_URL || joinUrl(EDGE_PUBLIC_BASE_URL, "/video_feed");
+export const STREAM_RAW_URL =
+  process.env.NEXT_PUBLIC_STREAM_RAW_URL || joinUrl(EDGE_PUBLIC_BASE_URL, "/video_feed_raw");
+export const STREAM_HEALTH_URL =
+  process.env.NEXT_PUBLIC_STREAM_HEALTH_URL || joinUrl(EDGE_PUBLIC_BASE_URL, "/health");
 
 // Application Configuration
 export const APP_NAME = "Visitor Monitoring System";
@@ -49,7 +71,11 @@ export const EXPORT_FORMAT_EXCEL = "excel";
 export const EXPORT_FORMAT_CSV = "csv";
 
 // Refresh intervals (ms)
-export const POLL_INTERVAL = 30000; // 30 seconds - polling interval for stats
-export const STATS_REFRESH_INTERVAL = 30000; // 30 seconds
+export const POLL_INTERVAL = parsePositiveInt(
+  process.env.NEXT_PUBLIC_POLL_INTERVAL_MS,
+); // 30 seconds - polling interval for stats
+export const STATS_REFRESH_INTERVAL = POLL_INTERVAL; // 30 seconds
 export const LIVE_FEED_REFRESH_INTERVAL = 100; // 100ms for video feed
-export const STREAM_HEALTH_INTERVAL = 5000; // 5 seconds - check if edge worker stream is healthy
+export const STREAM_HEALTH_INTERVAL = parsePositiveInt(
+  process.env.NEXT_PUBLIC_STREAM_HEALTH_INTERVAL_MS,
+); // 5 seconds - check if edge worker stream is healthy

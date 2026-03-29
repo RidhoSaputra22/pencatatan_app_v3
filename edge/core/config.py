@@ -4,13 +4,29 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env file from parent directory
-env_path = Path(__file__).parent.parent.parent / ".env"
+PROJECT_DIR = Path(__file__).resolve().parents[2]
+env_path = PROJECT_DIR / ".env"
 load_dotenv(dotenv_path=env_path)
+
+
+def resolve_project_path(value: str) -> str:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_DIR / path
+    return str(path.resolve())
 
 
 def env(name: str, default: str = "") -> str:
     """Get environment variable with default value"""
     return os.getenv(name, default)
+
+
+def env_required(name: str) -> str:
+    """Get a required environment variable."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return raw.strip()
 
 
 def env_int(name: str, default: int) -> int:
@@ -24,6 +40,35 @@ def env_int(name: str, default: int) -> int:
         return default
 
 
+def env_int_required(name: str) -> int:
+    """Parse a required integer environment variable."""
+    raw = env_required(name)
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"Environment variable {name} must be an integer") from exc
+
+
+def env_float(name: str, default: float) -> float:
+    """Parse float environment variable safely."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw.strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def env_float_required(name: str) -> float:
+    """Parse a required float environment variable."""
+    raw = env_required(name)
+    try:
+        return float(raw)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"Environment variable {name} must be a float") from exc
+
+
 def env_bool(name: str, default: bool = False) -> bool:
     """Parse bool-like environment variable values."""
     raw = os.getenv(name)
@@ -32,45 +77,57 @@ def env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def env_bool_required(name: str) -> bool:
+    """Parse a required bool-like environment variable."""
+    return env_required(name).lower() in {"1", "true", "yes", "on"}
+
+
 # Mode configuration
-MODE = env("EDGE_MODE", "fake").lower()
-CAMERA_ID = int(env("EDGE_CAMERA_ID", "1"))
+MODE = env_required("EDGE_MODE").lower()
+CAMERA_ID = env_int_required("EDGE_CAMERA_ID")
 
 # Timing configuration
-POST_INTERVAL = int(env("EDGE_POST_INTERVAL_SECONDS", "3"))
-CONFIG_REFRESH = int(env("EDGE_CONFIG_REFRESH_SECONDS", "30"))
+POST_INTERVAL = env_int_required("EDGE_POST_INTERVAL_SECONDS")
+CONFIG_REFRESH = env_int_required("EDGE_CONFIG_REFRESH_SECONDS")
 
 # Stream configuration
 EDGE_STREAM_URL = env("EDGE_STREAM_URL", "").strip()
-EDGE_STREAM_PORT = env_int("EDGE_STREAM_PORT", 5000)
-EDGE_STREAM_JPEG_QUALITY = max(50, min(95, env_int("EDGE_STREAM_JPEG_QUALITY", 80)))
-EDGE_STREAM_MAX_FPS = max(0, env_int("EDGE_STREAM_MAX_FPS", 0))
+EDGE_STREAM_HOST = env_required("EDGE_STREAM_HOST")
+EDGE_STREAM_PORT = env_int_required("EDGE_STREAM_PORT")
+EDGE_STREAM_JPEG_QUALITY = max(50, min(95, env_int_required("EDGE_STREAM_JPEG_QUALITY")))
+EDGE_STREAM_MAX_FPS = max(0, env_int_required("EDGE_STREAM_MAX_FPS"))
+EDGE_STREAM_ALLOW_ORIGIN = env_required("EDGE_STREAM_ALLOW_ORIGIN")
 
 # YOLOv5 configuration
-CONF_TH = float(env("YOLOV5_CONF", "0.35"))
-IOU_TH = float(env("YOLOV5_IOU", "0.45"))
-IMG_SIZE = int(env("YOLOV5_IMG_SIZE", "640"))
+CONF_TH = env_float_required("YOLOV5_CONF")
+IOU_TH = env_float_required("YOLOV5_IOU")
+IMG_SIZE = env_int_required("YOLOV5_IMG_SIZE")
 # Device: "cpu", "cuda", "xpu" (Intel GPU), or "auto" (auto-detect)
-DEVICE = env("YOLOV5_DEVICE", "auto")
-WEIGHTS = env("YOLOV5_WEIGHTS", "").strip()
-REPO = env("YOLOV5_REPO", "").strip()
+DEVICE = env_required("YOLOV5_DEVICE")
+WEIGHTS = resolve_project_path(env_required("YOLOV5_WEIGHTS"))
+REPO = resolve_project_path(env("YOLOV5_REPO", "").strip()) if env("YOLOV5_REPO", "").strip() else ""
 
 # Tracking configuration
-TRACK_MAX_DISAPPEARED = int(env("TRACK_MAX_DISAPPEARED", "20"))
-TRACK_MAX_DISTANCE = float(env("TRACK_MAX_DISTANCE", "80"))
-TRACK_CONFIRM_FRAMES = max(1, env_int("TRACK_CONFIRM_FRAMES", 1))
+TRACK_MAX_DISAPPEARED = env_int_required("TRACK_MAX_DISAPPEARED")
+TRACK_MAX_DISTANCE = env_float_required("TRACK_MAX_DISTANCE")
+TRACK_CONFIRM_FRAMES = max(1, env_int_required("TRACK_CONFIRM_FRAMES"))
 
 # Face recognition configuration
-FACE_RECOGNITION_ENABLED = env_bool("FACE_RECOGNITION_ENABLED", True)
-INSIGHTFACE_MODEL_NAME = env("INSIGHTFACE_MODEL_NAME", "buffalo_l")
-INSIGHTFACE_DET_SIZE = int(env("INSIGHTFACE_DET_SIZE", "640"))
-EMPLOYEE_MATCH_THRESHOLD = float(env("EMPLOYEE_MATCH_THRESHOLD", "0.45"))
-EMPLOYEE_REGISTRY_REFRESH_SECONDS = int(env("EMPLOYEE_REGISTRY_REFRESH_SECONDS", "60"))
-FACE_RECHECK_SECONDS = float(env("FACE_RECHECK_SECONDS", "0.8"))
-FACE_UNKNOWN_TIMEOUT = float(env("FACE_UNKNOWN_TIMEOUT", "2.5"))
+FACE_RECOGNITION_ENABLED = env_bool_required("FACE_RECOGNITION_ENABLED")
+INSIGHTFACE_MODEL_NAME = env_required("INSIGHTFACE_MODEL_NAME")
+INSIGHTFACE_DET_SIZE = env_int_required("INSIGHTFACE_DET_SIZE")
+INSIGHTFACE_PROVIDERS = [
+    provider.strip()
+    for provider in env_required("INSIGHTFACE_PROVIDERS").split(",")
+    if provider.strip()
+]
+EMPLOYEE_MATCH_THRESHOLD = env_float_required("EMPLOYEE_MATCH_THRESHOLD")
+EMPLOYEE_REGISTRY_REFRESH_SECONDS = env_int_required("EMPLOYEE_REGISTRY_REFRESH_SECONDS")
+FACE_RECHECK_SECONDS = env_float_required("FACE_RECHECK_SECONDS")
+FACE_UNKNOWN_TIMEOUT = env_float_required("FACE_UNKNOWN_TIMEOUT")
 
 # Backend API configuration
-BACKEND_URL = env("BACKEND_URL", "http://localhost:8000")
+BACKEND_URL = env_required("BACKEND_URL")
 INGEST_URL = f"{BACKEND_URL}/api/events/ingest"
-AUTH_USER = env("EDGE_AUTH_USERNAME", "admin")
-AUTH_PASS = env("EDGE_AUTH_PASSWORD", "admin123")
+AUTH_USER = env_required("EDGE_AUTH_USERNAME")
+AUTH_PASS = env_required("EDGE_AUTH_PASSWORD")

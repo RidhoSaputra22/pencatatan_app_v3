@@ -1,6 +1,22 @@
+from pathlib import Path
 from sqlalchemy import text
 from sqlmodel import SQLModel, create_engine, Session
 from .settings import settings
+
+
+def _ensure_sqlite_parent_dir(database_url: str) -> None:
+    prefix = "sqlite:///"
+    if not database_url.startswith(prefix):
+        return
+
+    raw_path = database_url[len(prefix):]
+    if not raw_path or raw_path == ":memory:":
+        return
+
+    Path(raw_path).parent.mkdir(parents=True, exist_ok=True)
+
+
+_ensure_sqlite_parent_dir(settings.database_url)
 
 # SQLite specific: check_same_thread=False for FastAPI async
 connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}

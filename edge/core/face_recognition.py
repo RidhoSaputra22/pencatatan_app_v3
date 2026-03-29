@@ -9,6 +9,7 @@ from .config import (
     FACE_RECOGNITION_ENABLED,
     INSIGHTFACE_DET_SIZE,
     INSIGHTFACE_MODEL_NAME,
+    INSIGHTFACE_PROVIDERS,
     EMPLOYEE_MATCH_THRESHOLD,
     EMPLOYEE_REGISTRY_REFRESH_SECONDS,
     FACE_RECHECK_SECONDS,
@@ -71,7 +72,7 @@ class EmployeeFaceRecognizer:
         try:
             self._app = FaceAnalysis(
                 name=INSIGHTFACE_MODEL_NAME,
-                providers=["CPUExecutionProvider"],
+                providers=INSIGHTFACE_PROVIDERS,
             )
             self._app.prepare(
                 ctx_id=-1,

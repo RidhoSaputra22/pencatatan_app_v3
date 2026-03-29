@@ -1,38 +1,56 @@
+const path = require("path");
+const { loadEnvConfig } = require("@next/env");
+
+loadEnvConfig(path.resolve(__dirname, ".."));
+
+function requireEnv(name) {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    throw new Error(`[frontend] Missing required environment variable: ${name}`);
+  }
+  return value;
+}
+
+function withTrailingSlash(value) {
+  return value.endsWith("/") ? value : `${value}/`;
+}
+
+function joinUrl(base, pathname) {
+  return new URL(pathname, withTrailingSlash(base)).toString();
+}
+
+const backendUrl = requireEnv("BACKEND_URL");
+const edgePublicBaseUrl = requireEnv("EDGE_PUBLIC_BASE_URL");
+const pollIntervalMs = requireEnv("NEXT_PUBLIC_POLL_INTERVAL_MS");
+const streamHealthIntervalMs = requireEnv("NEXT_PUBLIC_STREAM_HEALTH_INTERVAL_MS");
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // API proxy — forward /api/* requests to backend
   async rewrites() {
     return [
       {
-        source: '/api/:path*',
-        destination: 'http://localhost:8000/:path*',
+        source: "/api/:path*",
+        destination: `${backendUrl}/:path*`,
       },
     ];
   },
 
-  // Environment variables
   env: {
-    BACKEND_URL: 'http://localhost:8000',
+    NEXT_PUBLIC_API_BASE: process.env.NEXT_PUBLIC_API_BASE || backendUrl,
+    NEXT_PUBLIC_EDGE_PUBLIC_BASE_URL:
+      process.env.NEXT_PUBLIC_EDGE_PUBLIC_BASE_URL || edgePublicBaseUrl,
+    NEXT_PUBLIC_STREAM_URL:
+      process.env.NEXT_PUBLIC_STREAM_URL || joinUrl(edgePublicBaseUrl, "/video_feed"),
+    NEXT_PUBLIC_STREAM_RAW_URL:
+      process.env.NEXT_PUBLIC_STREAM_RAW_URL || joinUrl(edgePublicBaseUrl, "/video_feed_raw"),
+    NEXT_PUBLIC_STREAM_HEALTH_URL:
+      process.env.NEXT_PUBLIC_STREAM_HEALTH_URL || joinUrl(edgePublicBaseUrl, "/health"),
+    NEXT_PUBLIC_POLL_INTERVAL_MS: pollIntervalMs,
+    NEXT_PUBLIC_STREAM_HEALTH_INTERVAL_MS: streamHealthIntervalMs,
   },
 
-  // Image optimization
   images: {
-    domains: ['localhost'],
     unoptimized: true,
-  },
-
-  // Headers for video streaming
-  async headers() {
-    return [
-      {
-        source: '/video_feed',
-        headers: [
-          { key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' },
-          { key: 'Pragma', value: 'no-cache' },
-          { key: 'Expires', value: '0' },
-        ],
-      },
-    ];
   },
 };
 

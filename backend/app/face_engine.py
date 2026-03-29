@@ -41,7 +41,7 @@ def get_face_app():
     if _face_app is None:
         app = FaceAnalysis(
             name=settings.insightface_model_name,
-            providers=["CPUExecutionProvider"],
+            providers=settings.insightface_provider_list(),
         )
         det_size = (settings.insightface_det_size, settings.insightface_det_size)
         app.prepare(ctx_id=-1, det_size=det_size)
