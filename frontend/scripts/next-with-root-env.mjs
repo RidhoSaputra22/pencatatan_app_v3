@@ -53,3 +53,5 @@ child.on("error", (error) => {
   console.error("[frontend] Failed to start Next.js:", error.message);
   process.exit(1);
 });
+
+// test updade
