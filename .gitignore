@@ -75,7 +75,7 @@ lerna-debug.log*
 snapshots/
 videos/
 recordings/
-*.mp4
+# *.mp4
 *.avi
 *.mov
 
@@ -122,7 +122,7 @@ dmypy.json
 
 # cctv files
 *.avi
-*.mp4
+# *.mp4
 *.mov
 *.mkv
 *.flv
