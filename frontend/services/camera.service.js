@@ -1,4 +1,4 @@
-import { get, post, put, del } from "./api";
+import { get, post, put, del, upload } from "./api";
 
 /**
  * GET /api/cameras/discover — detect available cameras on the system.
@@ -68,4 +68,110 @@ export function updateArea(areaId, data) {
  */
 export function deleteArea(areaId) {
   return del(`/api/areas/${areaId}`);
+}
+
+// ==================== Stream Relay ====================
+
+/**
+ * GET /stream/relay/health — check UDP stream relay status.
+ */
+export async function fetchStreamRelayHealth() {
+  const { API_BASE } = await import("@/lib/constants");
+  const res = await fetch(`${API_BASE}/stream/relay/health`);
+  if (!res.ok) throw new Error("Stream relay not available");
+  return res.json();
+}
+
+// ==================== Stream Capture Manager ====================
+
+/**
+ * POST /api/stream/start — start server-side video capture.
+ */
+export function startCapture({ source, quality = 80, max_fps = 15, max_width = 960 }) {
+  return post("/api/stream/start", { source, quality, max_fps, max_width });
+}
+
+/**
+ * POST /api/stream/stop — stop server-side video capture.
+ */
+export function stopCapture() {
+  return post("/api/stream/stop");
+}
+
+/**
+ * GET /api/stream/status — get capture status.
+ */
+export function fetchCaptureStatus() {
+  return get("/api/stream/status");
+}
+
+/**
+ * PUT /api/stream/config — update capture config on the fly.
+ */
+export function updateCaptureConfig(config) {
+  return put("/api/stream/config", config);
+}
+
+/**
+ * POST /api/stream/test — test if a source can be opened.
+ */
+export function testVideoSource(url) {
+  return post("/api/stream/test", { url });
+}
+
+// ==================== Network Scanner ====================
+
+/**
+ * GET /api/network/subnets — detect local subnets.
+ */
+export function fetchSubnets() {
+  return get("/api/network/subnets");
+}
+
+/**
+ * POST /api/network/scan — scan network for RTSP cameras.
+ */
+export function scanNetwork({ subnet, ports } = {}) {
+  return post("/api/network/scan", { subnet, ports });
+}
+
+/**
+ * POST /api/network/test-rtsp — test a specific RTSP URL.
+ */
+export function testRtspUrl(url) {
+  return post("/api/network/test-rtsp", { url });
+}
+
+// ==================== Footage Upload ====================
+
+/**
+ * POST /api/footage/upload — upload video CCTV file.
+ */
+export function uploadFootage(file, { setAsSource = false, cameraId = 1 } = {}) {
+  const formData = new FormData();
+  formData.append("video", file);
+  formData.append("set_as_source", setAsSource);
+  formData.append("camera_id", cameraId);
+  return upload("/api/footage/upload", formData);
+}
+
+/**
+ * GET /api/footage — list uploaded footage files.
+ */
+export function fetchFootageList() {
+  return get("/api/footage");
+}
+
+/**
+ * DELETE /api/footage/:filename — delete uploaded footage.
+ */
+export function deleteFootage(filename) {
+  return del(`/api/footage/${encodeURIComponent(filename)}`);
+}
+
+/**
+ * POST /api/footage/:filename/set-source — set footage as camera source.
+ */
+export function setFootageAsSource(filename, cameraId = 1) {
+  return post(`/api/footage/${encodeURIComponent(filename)}/set-source?camera_id=${cameraId}`);
 }

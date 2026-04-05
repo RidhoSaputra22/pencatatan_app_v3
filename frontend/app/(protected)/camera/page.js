@@ -1,10 +1,14 @@
 "use client";
 
+import { useState, useCallback } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useCamera } from "@/hooks/useCamera";
 import CameraForm from "@/components/camera/CameraForm";
 import CountingAreaForm from "@/components/camera/CountingAreaForm";
 import ConfigPreview from "@/components/camera/ConfigPreview";
+import FootageUpload from "@/components/camera/FootageUpload";
+import StreamManager from "@/components/camera/StreamManager";
+import RtspScanner from "@/components/camera/RtspScanner";
 import Alert from "@/components/ui/Alert";
 import Heading from "@/components/ui/Heading";
 import Card from "@/components/ui/Card";
@@ -15,11 +19,19 @@ export default function CameraPage() {
   const { camera, areas, error, reload } = useCamera(1);
   const isAdmin = user?.role === "ADMIN";
 
+  // Shared state: when RTSP scanner finds a URL, pass it to StreamManager
+  const [selectedRtspUrl, setSelectedRtspUrl] = useState("");
+
+  const handleRtspSelect = useCallback((url) => {
+    setSelectedRtspUrl(url);
+    // Scroll to stream manager for visibility
+    document.getElementById("stream-manager")?.scrollIntoView({ behavior: "smooth" });
+  }, []);
+
   return (
     <>
       <Heading level={1}>Konfigurasi Kamera</Heading>
       <div className="flex flex-col lg:flex-row gap-3">
-       
 
         {error && <Alert variant="error">{error}</Alert>}
 
@@ -79,6 +91,28 @@ export default function CameraPage() {
           )
         )}
       </div>
+
+      {/* Stream Capture Manager — admin only */}
+      {isAdmin && (
+        <div id="stream-manager">
+          <StreamManager
+            camera={camera}
+            onSourceChanged={reload}
+            externalSource={selectedRtspUrl}
+          />
+        </div>
+      )}
+
+      {/* RTSP Network Scanner — admin only */}
+      {isAdmin && (
+        <RtspScanner onSelectUrl={handleRtspSelect} />
+      )}
+
+      {/* Footage Upload Section — admin only */}
+      {isAdmin && (
+        <FootageUpload camera={camera} onSourceChanged={reload} />
+      )}
+
       <ConfigPreview camera={camera} areas={areas} />
     </>
   );

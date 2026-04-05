@@ -13,7 +13,7 @@ from .api_client import (
     login_token,
     send_visitor_event,
 )
-from .capture import LatestFrameCapture
+from .capture import LatestFrameCapture, is_video_file
 from .config import (
     CAMERA_ID,
     CONFIG_REFRESH,
@@ -173,6 +173,15 @@ def real_loop():
 
         ok, frame, last_frame_id = cap.read(last_frame_id=last_frame_id, timeout=1.0)
         if not ok or frame is None:
+            if cap is not None and hasattr(cap, 'file_ended') and cap.file_ended:
+                # Video file ended — loop from beginning
+                print("[edge] Video file ended. Restarting from beginning...")
+                cap.release()
+                cap = None
+                cap_source = ""
+                last_frame_id = 0
+                time.sleep(1)
+                continue
             print("[edge] Frame read failed. Reconnecting...")
             if cap is not None:
                 cap.release()

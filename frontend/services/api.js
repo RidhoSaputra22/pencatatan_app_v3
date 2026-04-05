@@ -47,3 +47,7 @@ export function put(path, body) {
 export function del(path) {
   return request(path, { method: "DELETE" });
 }
+
+export function upload(path, formData) {
+  return request(path, { method: "POST", body: formData });
+}

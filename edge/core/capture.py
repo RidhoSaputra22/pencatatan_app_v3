@@ -1,4 +1,5 @@
 """Async capture utilities that keep only the freshest camera frame."""
+import os
 import threading
 from typing import Optional, Tuple
 
@@ -6,9 +7,18 @@ import cv2
 import numpy as np
 
 
+def is_video_file(source: str) -> bool:
+    """Check if the source is a local video file (not a stream or webcam index)."""
+    if source.isdigit():
+        return False
+    if source.startswith(("rtsp://", "http://", "https://")):
+        return False
+    return os.path.isfile(source)
+
+
 def open_video_capture(source: str):
     """
-    Open video capture for webcam index, HTTP stream, or RTSP stream.
+    Open video capture for webcam index, HTTP stream, RTSP stream, or video file.
     Applies a small buffer where supported.
     """
     if source.isdigit():
@@ -21,6 +31,9 @@ def open_video_capture(source: str):
                 capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 return capture
         capture = cv2.VideoCapture(idx)
+    elif is_video_file(source):
+        print(f"[capture] Opening video file: {source}")
+        capture = cv2.VideoCapture(source)
     else:
         capture = cv2.VideoCapture(source)
 
@@ -33,12 +46,14 @@ class LatestFrameCapture:
 
     def __init__(self, source: str):
         self.source = source
+        self._is_file = is_video_file(source)
         self._capture = None
         self._thread = None
         self._frame = None
         self._frame_id = 0
         self._running = False
         self._read_failed = False
+        self._file_ended = False
         self._condition = threading.Condition()
 
     def start(self) -> bool:
@@ -58,6 +73,7 @@ class LatestFrameCapture:
         self._frame_id = 0
         self._running = True
         self._read_failed = False
+        self._file_ended = False
         self._thread = threading.Thread(
             target=self._reader_loop,
             name="latest-frame-capture",
@@ -75,6 +91,11 @@ class LatestFrameCapture:
             and not self._read_failed
         )
 
+    @property
+    def file_ended(self) -> bool:
+        """Return True if a video file reached the end."""
+        return self._file_ended
+
     def read(
         self,
         last_frame_id: int = 0,
@@ -89,6 +110,7 @@ class LatestFrameCapture:
                 lambda: (
                     self._frame_id != last_frame_id
                     or self._read_failed
+                    or self._file_ended
                     or not self._running
                 ),
                 timeout=timeout,
@@ -113,6 +135,7 @@ class LatestFrameCapture:
             self._thread = None
             self._frame = None
             self._read_failed = False
+            self._file_ended = False
             self._condition.notify_all()
 
         if capture is not None:
@@ -136,6 +159,12 @@ class LatestFrameCapture:
                     return
 
                 if not ok or frame is None:
+                    if self._is_file:
+                        # Video file ended — signal file_ended and stop
+                        self._file_ended = True
+                        self._condition.notify_all()
+                        print("[capture] Video file ended.")
+                        return
                     self._read_failed = True
                     self._condition.notify_all()
                     return
@@ -143,3 +172,12 @@ class LatestFrameCapture:
                 self._frame = frame
                 self._frame_id += 1
                 self._condition.notify_all()
+
+            # For video files, pace the read to ~30fps to simulate real-time
+            if self._is_file:
+                import time
+                fps = capture.get(cv2.CAP_PROP_FPS)
+                if fps > 0:
+                    time.sleep(1.0 / fps)
+                else:
+                    time.sleep(1.0 / 30.0)

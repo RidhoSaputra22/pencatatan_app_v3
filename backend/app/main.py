@@ -13,6 +13,7 @@ from collections import defaultdict
 from fastapi import FastAPI, Depends, HTTPException, Query, Form, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from sqlalchemy import or_
@@ -29,8 +30,34 @@ from .auth import (
     get_user_by_username, get_role_by_name, require_role
 )
 from .face_engine import extract_face_embedding, face_engine_status, store_employee_photo
+from .stream_relay import (
+    start_udp_receiver,
+    stop_udp_receiver,
+    generate_relay_frames,
+    get_relay_state,
+)
+from .stream_manager import (
+    start_capture,
+    stop_capture,
+    get_capture_state,
+    generate_capture_frames,
+    update_capture_config,
+    test_source,
+)
+from .network_scanner import (
+    scan_network,
+    get_local_subnets,
+    quick_rtsp_test,
+)
+
+import os
+from pathlib import Path
 
 app = FastAPI(title="Visitor Monitoring API", version="1.0.0")
+
+# Footage storage directory
+FOOTAGE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / "storage" / "footage"
+FOOTAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,6 +66,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve uploaded footage files as static
+app.mount("/storage/footage", StaticFiles(directory=str(FOOTAGE_DIR)), name="footage")
+
+# UDP Stream Relay configuration
+UDP_RELAY_HOST = os.getenv("UDP_RELAY_HOST", "0.0.0.0")
+UDP_RELAY_PORT = int(os.getenv("UDP_RELAY_PORT", "9999"))
 
 
 # ==================== Pydantic Schemas ====================
@@ -164,8 +198,12 @@ def serialize_employee(employee: Employee) -> EmployeeOut:
 
 @app.on_event("startup")
 def on_startup():
-    """Initialize database and seed data"""
+    """Initialize database, seed data, and start UDP stream receiver"""
     init_db()
+
+    # Start UDP stream receiver for client CCTV streaming
+    start_udp_receiver(host=UDP_RELAY_HOST, port=UDP_RELAY_PORT)
+    print(f"[backend] UDP stream relay started on {UDP_RELAY_HOST}:{UDP_RELAY_PORT}")
     
     with Session(engine) as session:
         # Create roles if not exist
@@ -240,6 +278,188 @@ async def health():
             "status": "unhealthy",
             "error": str(e),
         })
+
+# ==================== Stream Relay (Client CCTV → Backend → Edge) ====================
+
+@app.get("/stream/relay")
+def stream_relay():
+    """
+    MJPEG relay endpoint.
+    Client mengirim frame CCTV via UDP → backend menerima →
+    endpoint ini menyajikan sebagai MJPEG stream untuk edge worker.
+    
+    Edge worker bisa menggunakan URL ini sebagai EDGE_STREAM_URL:
+      EDGE_STREAM_URL=http://localhost:8000/stream/relay
+    """
+    response = StreamingResponse(
+        generate_relay_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
+
+
+@app.get("/stream/relay/health")
+def stream_relay_health():
+    """Health check untuk stream relay — digunakan frontend untuk cek status."""
+    state = get_relay_state()
+    return {
+        "status": "receiving" if state["has_frame"] else "waiting",
+        "udp_port": UDP_RELAY_PORT,
+        **state,
+    }
+
+
+# ==================== Stream Capture Manager (Server-side RTSP/Webcam) ====================
+
+class CaptureStartIn(BaseModel):
+    source: str
+    quality: int = 80
+    max_fps: int = 15
+    max_width: int = 960
+
+class CaptureConfigIn(BaseModel):
+    quality: Optional[int] = None
+    max_fps: Optional[int] = None
+    max_width: Optional[int] = None
+
+class RtspTestIn(BaseModel):
+    url: str
+
+class NetworkScanIn(BaseModel):
+    subnet: Optional[str] = None
+    ports: Optional[List[int]] = None
+
+
+@app.post("/api/stream/start")
+def api_start_capture(
+    payload: CaptureStartIn,
+    _: User = Depends(require_role("ADMIN")),
+):
+    """
+    Start capturing video dari sumber RTSP/webcam/file langsung di server.
+    Menggantikan kebutuhan menjalankan script client terpisah.
+    
+    Source bisa berupa:
+    - RTSP URL: rtsp://ip:554/live
+    - HTTP URL: http://ip:8080/video
+    - Webcam index: "0", "1"
+    - File path: /path/to/video.mp4
+    """
+    source = payload.source.strip()
+    if not source:
+        raise HTTPException(status_code=400, detail="Source tidak boleh kosong")
+    
+    state = start_capture(
+        source=source,
+        quality=payload.quality,
+        max_fps=payload.max_fps,
+        max_width=payload.max_width,
+    )
+    return {"ok": True, **state}
+
+
+@app.post("/api/stream/stop")
+def api_stop_capture(
+    _: User = Depends(require_role("ADMIN")),
+):
+    """Stop server-side video capture."""
+    state = stop_capture()
+    return {"ok": True, **state}
+
+
+@app.get("/api/stream/status")
+def api_capture_status(
+    _: User = Depends(require_role("ADMIN", "OPERATOR")),
+):
+    """Get current status of server-side video capture."""
+    return get_capture_state()
+
+
+@app.put("/api/stream/config")
+def api_update_capture_config(
+    payload: CaptureConfigIn,
+    _: User = Depends(require_role("ADMIN")),
+):
+    """Update capture configuration on the fly (quality, fps, resolution)."""
+    config = update_capture_config(
+        quality=payload.quality,
+        max_fps=payload.max_fps,
+        max_width=payload.max_width,
+    )
+    return {"ok": True, "config": config}
+
+
+@app.post("/api/stream/test")
+def api_test_source(
+    payload: RtspTestIn,
+    _: User = Depends(require_role("ADMIN")),
+):
+    """Test apakah sumber video (RTSP/webcam/file) bisa dibuka."""
+    source = payload.url.strip()
+    if not source:
+        raise HTTPException(status_code=400, detail="URL tidak boleh kosong")
+    result = test_source(source)
+    return result
+
+
+@app.get("/stream/capture")
+def stream_capture():
+    """
+    MJPEG stream dari server-side capture.
+    Edge worker bisa menggunakan URL ini sebagai EDGE_STREAM_URL:
+      EDGE_STREAM_URL=http://localhost:8000/stream/capture
+    """
+    response = StreamingResponse(
+        generate_capture_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
+
+
+# ==================== Network RTSP Scanner ====================
+
+@app.get("/api/network/subnets")
+def api_get_subnets(
+    _: User = Depends(require_role("ADMIN")),
+):
+    """Deteksi subnet lokal dari interface jaringan server."""
+    subnets = get_local_subnets()
+    return {"subnets": subnets}
+
+
+@app.post("/api/network/scan")
+def api_scan_network(
+    payload: NetworkScanIn,
+    _: User = Depends(require_role("ADMIN")),
+):
+    """
+    Scan jaringan lokal untuk menemukan kamera RTSP.
+    Proses ini bisa memakan waktu beberapa detik tergantung ukuran subnet.
+    """
+    cameras = scan_network(
+        subnet=payload.subnet,
+        ports=payload.ports,
+    )
+    return {"cameras": cameras, "count": len(cameras)}
+
+
+@app.post("/api/network/test-rtsp")
+def api_test_rtsp(
+    payload: RtspTestIn,
+    _: User = Depends(require_role("ADMIN")),
+):
+    """Test koneksi ke URL RTSP tertentu."""
+    result = quick_rtsp_test(payload.url.strip())
+    return result
+
 
 # ==================== Auth Endpoints ====================
 
@@ -1153,3 +1373,160 @@ def stats_per_second(
         for dt in sorted(buckets.keys())
     ]
     return result
+
+
+# ==================== Footage Upload (Client CCTV) ====================
+
+ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mkv", ".mov", ".flv", ".wmv", ".webm"}
+MAX_FOOTAGE_SIZE = 500 * 1024 * 1024  # 500 MB
+
+
+@app.post("/api/footage/upload")
+async def upload_footage(
+    video: UploadFile = File(...),
+    set_as_source: bool = Form(False),
+    camera_id: int = Form(1),
+    session: Session = Depends(get_session),
+    _: User = Depends(require_role("ADMIN")),
+):
+    """
+    Upload file video CCTV dari client melalui frontend.
+    Video disimpan di backend/storage/footage/ dan bisa diset sebagai sumber kamera.
+    """
+    import re
+    import uuid
+
+    if not video.filename:
+        raise HTTPException(status_code=400, detail="Nama file tidak boleh kosong")
+
+    ext = os.path.splitext(video.filename)[1].lower()
+    if ext not in ALLOWED_VIDEO_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Format file tidak didukung. Format yang diterima: {', '.join(ALLOWED_VIDEO_EXTENSIONS)}",
+        )
+
+    # Sanitize filename: keep only safe chars
+    base_name = re.sub(r"[^\w\-.]", "_", os.path.splitext(video.filename)[0])
+    unique_name = f"{base_name}_{uuid.uuid4().hex[:8]}{ext}"
+    file_path = FOOTAGE_DIR / unique_name
+
+    # Read and save with size check
+    total_size = 0
+    with open(file_path, "wb") as f:
+        while True:
+            chunk = await video.read(1024 * 1024)  # 1MB chunks
+            if not chunk:
+                break
+            total_size += len(chunk)
+            if total_size > MAX_FOOTAGE_SIZE:
+                f.close()
+                file_path.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File terlalu besar. Maksimum {MAX_FOOTAGE_SIZE // (1024*1024)} MB",
+                )
+            f.write(chunk)
+
+    # Optionally set as camera source
+    footage_abs_path = str(file_path.resolve())
+    if set_as_source:
+        cam = session.get(Camera, camera_id)
+        if cam:
+            cam.stream_url = footage_abs_path
+            session.add(cam)
+            session.commit()
+
+    return {
+        "ok": True,
+        "filename": unique_name,
+        "size_mb": round(total_size / (1024 * 1024), 2),
+        "path": footage_abs_path,
+        "set_as_source": set_as_source,
+    }
+
+
+@app.get("/api/footage")
+def list_footage(_: User = Depends(require_role("ADMIN", "OPERATOR"))):
+    """List semua file footage yang sudah diupload."""
+    files = []
+    for f in sorted(FOOTAGE_DIR.iterdir()):
+        if f.is_file() and f.suffix.lower() in ALLOWED_VIDEO_EXTENSIONS:
+            stat = f.stat()
+            files.append({
+                "filename": f.name,
+                "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                "path": str(f.resolve()),
+                "uploaded_at": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+            })
+    return files
+
+
+@app.delete("/api/footage/{filename}")
+def delete_footage(
+    filename: str,
+    session: Session = Depends(get_session),
+    _: User = Depends(require_role("ADMIN")),
+):
+    """Hapus file footage yang sudah diupload."""
+    import re
+
+    # Sanitize: only allow safe filename chars
+    if not re.match(r"^[\w\-. ]+$", filename):
+        raise HTTPException(status_code=400, detail="Nama file tidak valid")
+
+    file_path = FOOTAGE_DIR / filename
+    # Prevent path traversal
+    if not file_path.resolve().parent == FOOTAGE_DIR.resolve():
+        raise HTTPException(status_code=400, detail="Path tidak valid")
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File tidak ditemukan")
+
+    # Check if any camera is using this file as source
+    abs_path = str(file_path.resolve())
+    cameras = session.exec(select(Camera).where(Camera.stream_url == abs_path)).all()
+    if cameras:
+        cam_names = ", ".join(c.name for c in cameras)
+        raise HTTPException(
+            status_code=409,
+            detail=f"File sedang digunakan oleh kamera: {cam_names}. Ubah sumber kamera terlebih dahulu.",
+        )
+
+    file_path.unlink()
+    return {"ok": True, "message": f"File '{filename}' berhasil dihapus"}
+
+
+@app.post("/api/footage/{filename}/set-source")
+def set_footage_as_source(
+    filename: str,
+    camera_id: int = Query(1),
+    session: Session = Depends(get_session),
+    _: User = Depends(require_role("ADMIN")),
+):
+    """Set file footage sebagai sumber video kamera."""
+    import re
+
+    if not re.match(r"^[\w\-. ]+$", filename):
+        raise HTTPException(status_code=400, detail="Nama file tidak valid")
+
+    file_path = FOOTAGE_DIR / filename
+    if not file_path.resolve().parent == FOOTAGE_DIR.resolve():
+        raise HTTPException(status_code=400, detail="Path tidak valid")
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File tidak ditemukan")
+
+    cam = session.get(Camera, camera_id)
+    if not cam:
+        raise HTTPException(status_code=404, detail="Kamera tidak ditemukan")
+
+    cam.stream_url = str(file_path.resolve())
+    session.add(cam)
+    session.commit()
+
+    return {
+        "ok": True,
+        "message": f"Kamera '{cam.name}' akan menggunakan footage '{filename}'",
+        "stream_url": cam.stream_url,
+    }
