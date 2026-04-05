@@ -11,10 +11,10 @@ export default function StatsTable({ daily = [] }) {
   const columns = [
     "Tanggal",
     "Camera ID",
-    "Total Event",
-    "Unik",
-    "Masuk",
-    "Keluar",
+    "Total Aktivitas",
+    "Pengunjung Unik",
+    "Pengunjung Masuk",
+    "Pengunjung Keluar",
   ];
 
   const rows = daily.map((r) => [

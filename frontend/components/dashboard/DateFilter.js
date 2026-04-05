@@ -1,13 +1,16 @@
 "use client";
 
-import Section from "@/components/ui/Section";
-import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 
-/**
- * Date range filter component for dashboard.
- * Allows switching between "Hari Ini" and custom date range.
- */
+const PRESETS = [
+  { key: "today", label: "Hari Ini" },
+  { key: "yesterday", label: "Kemarin" },
+  { key: "7days", label: "7 Hari" },
+  { key: "30days", label: "30 Hari" },
+  { key: "month", label: "Bulan Ini" },
+  { key: "range", label: "Custom" },
+];
+
 export default function DateFilter({
   filterMode,
   setFilterMode,
@@ -18,63 +21,46 @@ export default function DateFilter({
   today,
 }) {
   return (
-    <Section title="Filter Periode">
-      <div className="flex flex-wrap items-end gap-3 ">
-        {/* Mode toggle */}
-        <div className="flex gap-1">
-          <Button
-            size="sm"
-            variant={filterMode === "today" ? "primary" : "ghost"}
-            className={filterMode === "today" ? "text-white" : ""}
-            onClick={() => {
-              setFilterMode("today");
-              setFilterFrom(today);
-              setFilterTo(today);
-            }}
+    <div className="flex flex-wrap items-center gap-2">
+      {/* Pill tabs */}
+      <div className="flex flex-wrap gap-1">
+        {PRESETS.map(({ key, label }) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setFilterMode(key)}
+            className={`px-4 py-1.5 text-sm font-medium rounded-full transition-colors ${
+              filterMode === key
+                ? "bg-primary text-white shadow-sm"
+                : "bg-base-200 text-base-content/70 hover:bg-base-300"
+            }`}
           >
-            Hari Ini
-          </Button>
-          <Button
-            size="sm"
-            variant={filterMode === "range" ? "primary" : "ghost"}
-            className={filterMode === "range" ? "text-white" : ""}
-            onClick={() => setFilterMode("range")}
-          >
-            Rentang Tanggal
-          </Button>
-        </div>
-
-        {/* Date range inputs */}
-        {filterMode === "range" && (
-          <>
-            <div className="flex">
-              <label className="label py-0 ">
-                <span className="label-text text-xs">Dari</span>
-              </label>
-              <Input
-                type="date"
-                className="input-sm w-40"
-                value={filterFrom}
-                max={filterTo || today}
-                onChange={(e) => setFilterFrom(e.target.value)}
-              />
-            </div>
-            <div className="flex">
-              <label className="label py-0 ">
-                <span className="label-text text-xs">Sampai</span>
-              </label>
-              <Input
-                type="date"
-                className="input-sm w-40"
-                value={filterTo}
-                min={filterFrom}
-                max={today}
-                onChange={(e) => setFilterTo(e.target.value)}
-              />
-            </div>
-          </>
-        )}
+            {label}
+          </button>
+        ))}
       </div>
-    </Section>
+
+      {/* Custom date range inputs */}
+      {filterMode === "range" && (
+        <div className="flex items-center gap-2 ml-2">
+          <Input
+            type="date"
+            className="input-sm w-36"
+            value={filterFrom}
+            max={filterTo || today}
+            onChange={(e) => setFilterFrom(e.target.value)}
+          />
+          <span className="text-sm text-base-content/50">—</span>
+          <Input
+            type="date"
+            className="input-sm w-36"
+            value={filterTo}
+            min={filterFrom}
+            max={today}
+            onChange={(e) => setFilterTo(e.target.value)}
+          />
+        </div>
+      )}
+    </div>
   );
 }

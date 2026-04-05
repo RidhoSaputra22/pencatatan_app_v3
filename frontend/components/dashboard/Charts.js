@@ -1,4 +1,4 @@
-import { Line, Doughnut } from "react-chartjs-2";
+import { Line, Bar, Doughnut } from "react-chartjs-2";
 import { useEffect, useRef, useState } from "react";
 import { fetchStatsPerSecond } from "@/services/stats.service";
 import {
@@ -7,7 +7,9 @@ import {
   LinearScale,
   PointElement,
   LineElement,
+  BarElement,
   ArcElement,
+  Filler,
   Tooltip,
   Legend,
 } from "chart.js";
@@ -17,13 +19,15 @@ ChartJS.register(
   LinearScale,
   PointElement,
   LineElement,
+  BarElement,
   ArcElement,
+  Filler,
   Tooltip,
   Legend,
 );
 
 // Jika pollingInterval & day diberikan, LineChart akan polling data per second dari API
-export function LineChart({ labels, data, label, pollingInterval, day }) {
+export function LineChart({ labels, data, label, pollingInterval, day, color = "#6366f1" }) {
   const [liveLabels, setLiveLabels] = useState(labels || []);
   const [liveData, setLiveData] = useState(data || []);
   const timer = useRef(null);
@@ -60,14 +64,81 @@ export function LineChart({ labels, data, label, pollingInterval, day }) {
       {
         label: label || "Statistik",
         data: pollingInterval && day ? liveData : data,
-        fill: false,
-        borderColor: "#6366f1",
-        backgroundColor: "#6366f1",
-        tension: 0.3,
+        fill: true,
+        borderColor: color,
+        backgroundColor: color + "1a",
+        pointBackgroundColor: color,
+        pointRadius: 2,
+        tension: 0.4,
+        borderWidth: 2,
       },
     ],
   };
-  return <Line data={chartData} />;
+
+  const options = {
+    responsive: true,
+    plugins: {
+      legend: { display: false },
+    },
+    scales: {
+      x: {
+        grid: { color: "#f3f4f6" },
+        ticks: { font: { size: 10 }, maxTicksLimit: 12 },
+      },
+      y: {
+        grid: { color: "#f3f4f6" },
+        beginAtZero: true,
+        ticks: { font: { size: 10 } },
+      },
+    },
+  };
+
+  return <Line data={chartData} options={options} />;
+}
+
+/**
+ * Stacked bar chart for Masuk vs Keluar comparison.
+ */
+export function StackedBarChart({ labels, dataIn, dataOut }) {
+  const chartData = {
+    labels,
+    datasets: [
+      {
+        label: "Pengunjung Masuk",
+        data: dataIn,
+        backgroundColor: "#22c55e",
+        borderRadius: 2,
+      },
+      {
+        label: "Pengunjung Keluar",
+        data: dataOut,
+        backgroundColor: "#ef4444",
+        borderRadius: 2,
+      },
+    ],
+  };
+
+  const options = {
+    responsive: true,
+    plugins: {
+      legend: { position: "bottom", labels: { font: { size: 11 } } },
+    },
+    scales: {
+      x: {
+        stacked: true,
+        grid: { display: false },
+        ticks: { font: { size: 10 }, maxTicksLimit: 12 },
+      },
+      y: {
+        stacked: true,
+        grid: { color: "#f3f4f6" },
+        beginAtZero: true,
+        ticks: { font: { size: 10 } },
+      },
+    },
+  };
+
+  return <Bar data={chartData} options={options} />;
 }
 
 export function DoughnutChart({

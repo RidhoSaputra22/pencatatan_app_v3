@@ -47,6 +47,16 @@ export function todayISO() {
 }
 
 /**
+ * Get yesterday's date in ISO format (YYYY-MM-DD)
+ * @returns {string}
+ */
+export function yesterdayISO() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return formatDate(d);
+}
+
+/**
  * Format date to YYYY-MM-DD
  * @param {Date} date
  * @returns {string}

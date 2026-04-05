@@ -2,19 +2,16 @@
 
 import { useAuth } from "@/context/AuthContext";
 import { useStats } from "@/hooks/useStats";
-import { useEffect, useState } from "react";
-import { fetchStatsPerSecond } from "@/services/stats.service";
 
 import DateFilter from "@/components/dashboard/DateFilter";
 import StatsGrid from "@/components/dashboard/StatsGrid";
-import { LineChart, DoughnutChart } from "@/components/dashboard/Charts";
+import InsightsPanel from "@/components/dashboard/InsightsPanel";
+import { LineChart, StackedBarChart } from "@/components/dashboard/Charts";
 import CameraView from "@/components/dashboard/CameraView";
 import StatsTable from "@/components/dashboard/StatsTable";
 import ExportSection from "@/components/dashboard/ExportSection";
 import Alert from "@/components/ui/Alert";
-import Heading from "@/components/ui/Heading";
 import Card from "@/components/ui/Card";
-import Section from "@/components/ui/Section";
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -22,10 +19,15 @@ export default function DashboardPage() {
     day,
     today,
     daily,
+    perSecond,
+    hourlyData,
     totalEvents,
     uniqueVisitors,
     totalIn,
     totalOut,
+    changePercents,
+    insights,
+    lastUpdatedAt,
     error,
     reload,
     filterMode,
@@ -36,109 +38,124 @@ export default function DashboardPage() {
     setFilterTo,
   } = useStats();
 
-  // State untuk data per second (granular)
-  const [perSecond, setPerSecond] = useState([]);
-  useEffect(() => {
-    if (filterMode === "today") {
-      fetchStatsPerSecond(today)
-        .then(setPerSecond)
-        .catch(() => setPerSecond([]));
-    } else {
-      setPerSecond([]);
-    }
-  }, [today, filterMode]);
+  // Chart data for range modes
+  const rangeLabels = daily.map((r) => r.stat_date || r.date || "-");
+  const rangeIn = daily.map((r) => r.total_in);
+  const rangeOut = daily.map((r) => r.total_out);
 
-  // Chart data: jika hari ini, pakai perSecond, jika range pakai daily
-  const chartLabels =
-    filterMode === "today"
-      ? perSecond.map((r) => r.second.slice(11, 19)) // HH:MM:SS
-      : daily.map((r) => r.stat_date || r.date || "-");
-  const chartTotalEvents =
-    filterMode === "today"
-      ? perSecond.map((r) => r.count)
-      : daily.map((r) => r.total_events);
-  const chartUnique = daily.map((r) => r.unique_visitors);
-  const chartIn = daily.map((r) => r.total_in);
-  const chartOut = daily.map((r) => r.total_out);
+  // Decide which data to use for charts
+  const isToday = filterMode === "today";
+  const chartLineLabels = isToday ? hourlyData.labels : rangeLabels;
+  const chartLineData = isToday
+    ? hourlyData.data
+    : daily.map((r) => r.total_events);
+  const barLabels = isToday ? hourlyData.labels : rangeLabels;
+  const barIn = isToday
+    ? (() => {
+        // aggregate perSecond into hourly for in/out (not available per-second, use daily)
+        // For today mode, use hourlyData for total, but in/out from daily
+        return daily.map((r) => r.total_in);
+      })()
+    : rangeIn;
+  const barOut = isToday
+    ? daily.map((r) => r.total_out)
+    : rangeOut;
+  // For today single-day bar chart, use daily data labels if available
+  const barChartLabels = isToday && daily.length > 0
+    ? daily.map((r) => r.camera_id ? `Cam ${r.camera_id}` : r.stat_date || "-")
+    : barLabels;
 
   return (
-    <>
-      <Heading level={1} className="mb-4">
-        Dashboard Monitoring Pengunjung
-      </Heading>
+    <div className="space-y-8">
+      {/* ===== HEADER: Title + Live Status + Last Update + Date Filter ===== */}
+      <div className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold text-base-content">
+              Dashboard Monitoring
+            </h1>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-success/10 text-success text-xs font-semibold">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
+              </span>
+              Live
+            </span>
+          </div>
+          {lastUpdatedAt && (
+            <span className="text-xs text-base-content/40">
+              Terakhir diperbarui:{" "}
+              {lastUpdatedAt.toLocaleTimeString("id-ID", {
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+              })}
+            </span>
+          )}
+        </div>
+
+        {/* Date filter pills */}
+        <DateFilter
+          filterMode={filterMode}
+          setFilterMode={setFilterMode}
+          filterFrom={filterFrom}
+          setFilterFrom={setFilterFrom}
+          filterTo={filterTo}
+          setFilterTo={setFilterTo}
+          today={today}
+        />
+      </div>
+
       {error && <Alert variant="error">{error}</Alert>}
 
-      {/* Date filter for period selection */}
-      <DateFilter
-        filterMode={filterMode}
-        setFilterMode={setFilterMode}
-        filterFrom={filterFrom}
-        setFilterFrom={setFilterFrom}
-        filterTo={filterTo}
-        setFilterTo={setFilterTo}
-        today={today}
-      />
-
+      {/* ===== KPI CARDS ===== */}
       <StatsGrid
-        day={day}
         totalEvents={totalEvents}
         uniqueVisitors={uniqueVisitors}
         totalIn={totalIn}
         totalOut={totalOut}
+        changePercents={changePercents}
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 ">
-        <div className="col-span-2 min-h-full">
-          <CameraView />
-        </div>
-        <div className="p-0 py-6 lg:p-6">
-          <Card>
-            <h3 className="font-semibold mb-2">Distribusi Masuk vs Keluar</h3>
-            <DoughnutChart
-              labels={["Masuk", "Keluar"]}
-              data={[totalIn, totalOut]}
-              label="Distribusi"
-            />
-          </Card>
-        </div>
-      </div>
+      {/* ===== INSIGHTS ===== */}
+      <InsightsPanel insights={insights} />
 
-      {/* Chart Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 my-6">
+      {/* ===== CHARTS: 2 columns ===== */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <Card>
-          <h3 className="font-semibold mb-2">
-            Tren Total Event per Hari / Realtime
+          <h3 className="font-semibold mb-4 text-base-content/80">
+            {isToday ? "Tren Pengunjung per Jam" : "Tren Aktivitas per Hari"}
           </h3>
           <LineChart
-            labels={chartLabels}
-            data={chartTotalEvents}
-            label="Total Event"
-            pollingInterval={filterMode === "today" ? 2000 : undefined}
-            day={filterMode === "today" ? today : undefined}
+            labels={chartLineLabels}
+            data={chartLineData}
+            label="Total Aktivitas"
+            pollingInterval={isToday ? 5000 : undefined}
+            day={isToday ? today : undefined}
+            color="#6366f1"
           />
         </Card>
 
         <Card>
-          <h3 className="font-semibold mb-2">Tren Pengunjung Unik</h3>
-          <LineChart
-            labels={chartLabels}
-            data={chartUnique}
-            label="Pengunjung Unik"
+          <h3 className="font-semibold mb-4 text-base-content/80">
+            Perbandingan Masuk vs Keluar
+          </h3>
+          <StackedBarChart
+            labels={barChartLabels}
+            dataIn={barIn}
+            dataOut={barOut}
           />
-        </Card>
-        <Card className="">
-          <h3 className="font-semibold mb-2">Tren Masuk</h3>
-          <LineChart labels={chartLabels} data={chartIn} label="Masuk" />
-        </Card>
-        <Card className="">
-          <h3 className="font-semibold mb-2">Tren Keluar</h3>
-          <LineChart labels={chartLabels} data={chartOut} label="Keluar" />
         </Card>
       </div>
 
+      {/* ===== STATS TABLE ===== */}
       <StatsTable daily={daily} />
 
+      {/* ===== LIVE CAMERA (compact, below) ===== */}
+      <CameraView />
+
+      {/* ===== EXPORT ===== */}
       <ExportSection filterFrom={filterFrom} filterTo={filterTo} day={day} />
-    </>
+    </div>
   );
 }

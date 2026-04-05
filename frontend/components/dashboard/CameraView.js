@@ -119,38 +119,39 @@ export default function CameraView() {
   return (
     <Section title="Live Camera Preview">
       {loading && !error && (
-        <div className="bg-base-200 rounded-sm p-10 text-center my-3">
-          <span className="loading loading-dots loading-md" />
-          <p className="mt-2">Loading camera stream...</p>
-          <p className="text-xs opacity-60">Connecting to video source...</p>
+        <div className="bg-base-200 rounded-sm p-6 text-center">
+          <span className="loading loading-dots loading-sm" />
+          <p className="mt-1 text-sm">Menghubungkan ke kamera...</p>
         </div>
       )}
 
       {error && (
-        <div className="space-y-3">
+        <div className="space-y-2">
           <Alert variant="secondary">
             <div>
-              <p className="font-medium">Tidak bisa terkoneksi ke CCTV</p>
+              <p className="font-medium text-sm">Tidak bisa terkoneksi ke CCTV</p>
               <p className="text-xs">{error}</p>
             </div>
           </Alert>
-          <Button variant="primary" size="sm" onClick={retryStream}>
+          <Button variant="primary" size="xs" onClick={retryStream}>
             Retry Stream
           </Button>
         </div>
       )}
 
-      <img
-        ref={imgRef}
-        src={streamSrc}
-        alt="Camera Feed"
-        onError={handleImageError}
-        onLoad={handleImageLoad}
-        className={`w-full rounded-sm bg-black ${loading || error || !streamSrc ? "hidden" : "block"}`}
-      />
+      <div className="max-h-[300px] overflow-hidden bg-black rounded-sm">
+        <img
+          ref={imgRef}
+          src={streamSrc}
+          alt="Camera Feed"
+          onError={handleImageError}
+          onLoad={handleImageLoad}
+          className={`w-full h-full object-contain ${loading || error || !streamSrc ? "hidden" : "block"}`}
+        />
+      </div>
 
       {!loading && !error && (
-        <p className="text-xs opacity-60 mt-2">Live stream dari {streamSourceLabel}.</p>
+        <p className="text-xs opacity-50 mt-1">Live stream dari {streamSourceLabel}.</p>
       )}
     </Section>
   );
