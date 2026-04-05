@@ -82,66 +82,6 @@ export async function fetchStreamRelayHealth() {
   return res.json();
 }
 
-// ==================== Stream Capture Manager ====================
-
-/**
- * POST /api/stream/start — start server-side video capture.
- */
-export function startCapture({ source, quality = 80, max_fps = 15, max_width = 960 }) {
-  return post("/api/stream/start", { source, quality, max_fps, max_width });
-}
-
-/**
- * POST /api/stream/stop — stop server-side video capture.
- */
-export function stopCapture() {
-  return post("/api/stream/stop");
-}
-
-/**
- * GET /api/stream/status — get capture status.
- */
-export function fetchCaptureStatus() {
-  return get("/api/stream/status");
-}
-
-/**
- * PUT /api/stream/config — update capture config on the fly.
- */
-export function updateCaptureConfig(config) {
-  return put("/api/stream/config", config);
-}
-
-/**
- * POST /api/stream/test — test if a source can be opened.
- */
-export function testVideoSource(url) {
-  return post("/api/stream/test", { url });
-}
-
-// ==================== Network Scanner ====================
-
-/**
- * GET /api/network/subnets — detect local subnets.
- */
-export function fetchSubnets() {
-  return get("/api/network/subnets");
-}
-
-/**
- * POST /api/network/scan — scan network for RTSP cameras.
- */
-export function scanNetwork({ subnet, ports } = {}) {
-  return post("/api/network/scan", { subnet, ports });
-}
-
-/**
- * POST /api/network/test-rtsp — test a specific RTSP URL.
- */
-export function testRtspUrl(url) {
-  return post("/api/network/test-rtsp", { url });
-}
-
 // ==================== Footage Upload ====================
 
 /**

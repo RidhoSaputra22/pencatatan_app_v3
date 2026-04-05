@@ -15,7 +15,6 @@ pydantic-settings==2.4.0
 
 opencv-python
 python-multipart
-netifaces
 
 # Employee face recognition.
 # InsightFace currently installs reliably on Python <= 3.12 in this project.
