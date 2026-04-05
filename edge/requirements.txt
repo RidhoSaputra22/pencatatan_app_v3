@@ -1,14 +1,16 @@
 # Core dependencies
 requests
 python-dotenv
-numpy
+numpy<2
 opencv-python-headless
 flask
 flask-cors
 
-# YOLOv5 (install torch manually if needed)
-torch
-torchvision
+# YOLOv5
+# Keep torch/torchvision on stable CPU-compatible builds unless you explicitly
+# need CUDA and know the matching wheel pair for the host.
+torch==2.5.1
+torchvision==0.20.1
 
 ultralytics
 pandas

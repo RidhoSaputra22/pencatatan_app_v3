@@ -94,6 +94,11 @@ cd edge
 python worker.py
 ```
 
+Jika DeepSORT gagal inisialisasi di host CPU tertentu, worker sekarang akan
+otomatis menonaktifkan MKLDNN untuk percobaan ulang dan fallback ke
+CentroidTracker bila DeepSORT tetap gagal. Worker tetap jalan, tetapi akurasi
+re-identification lebih rendah dibanding DeepSORT.
+
 ### Mode yang Tersedia
 
 Mode REAL dengan YOLOv5:
@@ -123,6 +128,10 @@ EDGE_STREAM_URL=0          # webcam langsung
 ## Dependencies
 
 Lihat `requirements.txt` untuk daftar lengkap dependencies.
+
+Untuk environment CPU-only, gunakan versi yang dipin di `requirements.txt`.
+Hindari upgrade `numpy`, `torch`, atau `torchvision` secara bebas karena
+kombinasi yang tidak cocok bisa menyebabkan DeepSORT gagal saat warmup embedder.
 
 Key dependencies:
 - `opencv-python` - Computer vision

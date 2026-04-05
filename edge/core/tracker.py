@@ -17,6 +17,23 @@ except ImportError:
     print("[tracker] Warning: deep-sort-realtime not installed. Using fallback CentroidTracker.")
 
 
+def _disable_mkldnn_backend() -> bool:
+    """Disable MKLDNN as a workaround for some CPU primitive creation failures."""
+    try:
+        import torch
+    except ImportError:
+        return False
+
+    if not getattr(torch.backends, "mkldnn", None):
+        return False
+    if not torch.backends.mkldnn.enabled:
+        return False
+
+    torch.backends.mkldnn.enabled = False
+    print("[tracker] MKLDNN disabled for DeepSORT embedder compatibility")
+    return True
+
+
 @dataclass
 class Track:
     """Track object untuk menyimpan informasi tracking"""
@@ -49,23 +66,50 @@ class DeepSORTTracker:
         self.max_age = max_age
         self.n_init = n_init
         self.max_cosine_distance = max_cosine_distance
-        
-        if DEEPSORT_AVAILABLE:
-            self.tracker = DeepSort(
-                max_age=max_age,
-                n_init=n_init,
-                max_cosine_distance=max_cosine_distance,
-                embedder="mobilenet",  # Built-in ReID model
-                half=False,
-                embedder_gpu=False  # Use CPU for compatibility
-            )
-            print(f"[tracker] DeepSORT initialized (max_age={max_age}, n_init={n_init})")
-        else:
-            self.tracker = None
-            self._fallback_tracker = CentroidTrackerFallback(max_disappeared=max_age)
+        self.tracker = None
+        self._fallback_tracker = CentroidTrackerFallback(max_disappeared=max_age)
+        self.tracks: Dict[int, Track] = self._fallback_tracker.tracks
+        self.using_fallback = True
+
+        if not DEEPSORT_AVAILABLE:
             print("[tracker] Using fallback CentroidTracker")
-        
-        self.tracks: Dict[int, Track] = {}
+            return
+
+        try:
+            self.tracker = self._create_deepsort_tracker()
+        except RuntimeError as exc:
+            error_message = str(exc)
+            if "could not create a primitive" in error_message.lower() and _disable_mkldnn_backend():
+                try:
+                    self.tracker = self._create_deepsort_tracker()
+                except Exception as retry_exc:
+                    self._activate_fallback(f"DeepSORT retry failed after disabling MKLDNN: {retry_exc}")
+            else:
+                self._activate_fallback(f"DeepSORT init failed: {exc}")
+        except Exception as exc:
+            self._activate_fallback(f"DeepSORT init failed: {exc}")
+
+        if self.tracker is not None:
+            self.tracks = {}
+            self.using_fallback = False
+            print(f"[tracker] DeepSORT initialized (max_age={max_age}, n_init={n_init})")
+
+    def _create_deepsort_tracker(self):
+        return DeepSort(
+            max_age=self.max_age,
+            n_init=self.n_init,
+            max_cosine_distance=self.max_cosine_distance,
+            embedder="mobilenet",
+            half=False,
+            embedder_gpu=False,
+        )
+
+    def _activate_fallback(self, reason: str):
+        self.tracker = None
+        self.using_fallback = True
+        self.tracks = self._fallback_tracker.tracks
+        print(f"[tracker] Warning: {reason}")
+        print("[tracker] Falling back to CentroidTracker")
     
     def update(self, frame: np.ndarray, detections: List[Tuple[float, float, float, float, float]]) -> Dict[int, Track]:
         """
@@ -81,7 +125,8 @@ class DeepSORTTracker:
         if not DEEPSORT_AVAILABLE or self.tracker is None:
             # Fallback to centroid tracker
             bboxes = [(d[0], d[1], d[2], d[3]) for d in detections]
-            return self._fallback_tracker.update(bboxes)
+            self.tracks = self._fallback_tracker.update(bboxes)
+            return self.tracks
         
         if len(detections) == 0:
             # No detections - update tracker with empty list
@@ -96,9 +141,15 @@ class DeepSORTTracker:
             w = x2 - x1
             h = y2 - y1
             ds_detections.append(([x1, y1, w, h], conf, 'person'))
-        
+
         # Update DeepSORT
-        tracks = self.tracker.update_tracks(ds_detections, frame=frame)
+        try:
+            tracks = self.tracker.update_tracks(ds_detections, frame=frame)
+        except Exception as exc:
+            self._activate_fallback(f"DeepSORT update failed: {exc}")
+            bboxes = [(d[0], d[1], d[2], d[3]) for d in detections]
+            self.tracks = self._fallback_tracker.update(bboxes)
+            return self.tracks
         
         # Convert to our Track format
         self._update_tracks_from_deepsort(tracks)
