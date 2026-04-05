@@ -30,6 +30,10 @@ export const STREAM_RAW_URL =
   process.env.NEXT_PUBLIC_STREAM_RAW_URL || joinUrl(EDGE_PUBLIC_BASE_URL, "/video_feed_raw");
 export const STREAM_HEALTH_URL =
   process.env.NEXT_PUBLIC_STREAM_HEALTH_URL || joinUrl(EDGE_PUBLIC_BASE_URL, "/health");
+export const STREAM_RELAY_URL =
+  process.env.NEXT_PUBLIC_STREAM_RELAY_URL || joinUrl(API_BASE, "/stream/relay");
+export const STREAM_RELAY_HEALTH_URL =
+  process.env.NEXT_PUBLIC_STREAM_RELAY_HEALTH_URL || joinUrl(API_BASE, "/stream/relay/health");
 
 // Application Configuration
 export const APP_NAME = "Visitor Monitoring System";

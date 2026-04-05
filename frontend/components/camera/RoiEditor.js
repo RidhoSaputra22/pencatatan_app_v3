@@ -4,6 +4,8 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import {
   STREAM_HEALTH_INTERVAL,
   STREAM_HEALTH_URL,
+  STREAM_RELAY_HEALTH_URL,
+  STREAM_RELAY_URL,
   STREAM_RAW_URL,
 } from "@/lib/constants";
 
@@ -35,6 +37,7 @@ export default function RoiEditor({ points = [], onChange }) {
   const [dragging, setDragging] = useState(-1); // index of point being dragged
   const [hovered, setHovered] = useState(-1);
   const [streamOk, setStreamOk] = useState(false);
+  const [streamUrl, setStreamUrl] = useState("");
   const [scale, setScale] = useState(1);
   const [canvasW, setCanvasW] = useState(NATIVE_W);
   const [canvasH, setCanvasH] = useState(NATIVE_H);
@@ -79,11 +82,31 @@ export default function RoiEditor({ points = [], onChange }) {
     let timer;
     const check = async () => {
       try {
-        const r = await fetch(STREAM_HEALTH_URL);
-        if (r.ok) setStreamOk(true);
-        else setStreamOk(false);
+        const edgeResponse = await fetch(STREAM_HEALTH_URL, { cache: "no-store" }).catch(() => null);
+        if (edgeResponse?.ok) {
+          const edge = await edgeResponse.json();
+          if (edge?.status === "ok") {
+            setStreamOk(true);
+            setStreamUrl(STREAM_RAW_URL);
+            return;
+          }
+        }
+
+        const relayResponse = await fetch(STREAM_RELAY_HEALTH_URL, { cache: "no-store" }).catch(() => null);
+        if (relayResponse?.ok) {
+          const relay = await relayResponse.json();
+          if (relay?.has_frame) {
+            setStreamOk(true);
+            setStreamUrl(STREAM_RELAY_URL);
+            return;
+          }
+        }
+
+        setStreamOk(false);
+        setStreamUrl("");
       } catch {
         setStreamOk(false);
+        setStreamUrl("");
       }
     };
     check();
@@ -99,14 +122,13 @@ export default function RoiEditor({ points = [], onChange }) {
   useEffect(() => {
     if (!streamOk || !hiddenImgRef.current) return;
     const img = hiddenImgRef.current;
-    // Use raw feed (no overlay) so only the editor's polygon is visible
-    img.src = STREAM_RAW_URL;
+    img.src = streamUrl;
     imgRef.current = img;
     return () => {
       img.src = "";
       imgRef.current = null;
     };
-  }, [streamOk]);
+  }, [streamOk, streamUrl]);
 
   /* ───────── Resize observer → responsive canvas ───────── */
   useEffect(() => {
