@@ -86,9 +86,9 @@ export default function CameraPage() {
       <StreamingStatus />
 
       {/* Footage Upload Section — admin only */}
-      {isAdmin && (
+      {/* {isAdmin && (
         <FootageUpload camera={camera} onSourceChanged={reload} />
-      )}
+      )} */}
 
       <ConfigPreview camera={camera} areas={areas} />
     </>
