@@ -82,19 +82,21 @@ const typeClass = {
 export default function Alert({
   children,
   type = "info",
+  variant,
   dismissible = false,
   icon = null,
   className = "",
   ...rest
 }) {
   const [show, setShow] = useState(true);
+  const resolvedType = variant || type;
   if (!children || !show) return null;
   return (
     <div
-      className={`alert ${typeClass[type] || "alert-info"} ${className}`}
+      className={`alert ${typeClass[resolvedType] || "alert-info"} ${className}`}
       {...rest}
     >
-      {icon !== null ? icon : iconSvg[type]}
+      {icon !== null ? icon : iconSvg[resolvedType] || iconSvg.info}
       <span>{children}</span>
       {dismissible && (
         <button

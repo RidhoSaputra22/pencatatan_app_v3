@@ -6,7 +6,19 @@ import Alert from "./Alert";
  * Usage: <Toast toasts={[{type: 'success', message: 'Berhasil!'}]} />
  * type: success | error | warning | info
  */
-export default function Toast({ toasts = [] }) {
+const positionClass = {
+  "top-right": "toast-top toast-end",
+  "top-left": "toast-top toast-start",
+  "bottom-right": "toast-bottom toast-end",
+  "bottom-left": "toast-bottom toast-start",
+};
+
+export default function Toast({
+  toasts = [],
+  position = "bottom-right",
+  duration = 5000,
+  className = "",
+}) {
   const [visible, setVisible] = useState([]);
 
   useEffect(() => {
@@ -16,20 +28,28 @@ export default function Toast({ toasts = [] }) {
         setTimeout(
           () =>
             setVisible((v) => v.map((val, idx) => (idx === i ? false : val))),
-          5000,
+          toasts[i]?.duration ?? duration,
         ),
       );
       return () => timers.forEach(clearTimeout);
     }
-  }, [toasts]);
+  }, [toasts, duration]);
 
-  if (!toasts.length) return null;
+  const hasVisibleToast = toasts.some((_, i) => visible[i]);
+  if (!toasts.length || !hasVisibleToast) return null;
 
   return (
-    <div className="toast toast-end toast-bottom z-[9999]">
+    <div
+      className={`toast ${positionClass[position] || positionClass["bottom-right"]} z-[9999] ${className}`}
+    >
       {toasts.map((t, i) =>
         visible[i] ? (
-          <Alert key={i} type={t.type || "info"} className="max-w-sm">
+          <Alert
+            key={t.id || i}
+            type={t.type || t.variant || "info"}
+            dismissible={t.dismissible}
+            className={`max-w-sm shadow-lg ${t.className || ""}`}
+          >
             {t.message}
           </Alert>
         ) : null,

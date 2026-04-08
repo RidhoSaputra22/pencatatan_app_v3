@@ -7,18 +7,16 @@ import {
   deleteFootage,
   setFootageAsSource,
 } from "@/services/camera.service";
-import Button from "@/components/ui/Button";
 import Section from "@/components/ui/Section";
-import Alert from "@/components/ui/Alert";
+import { useToast } from "@/context/ToastContext";
 
 const ACCEPTED_FORMATS = ".mp4,.avi,.mkv,.mov,.flv,.wmv,.webm";
 
 export default function FootageUpload({ camera, onSourceChanged }) {
+  const { showToast } = useToast();
   const [files, setFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
   const [loadingFiles, setLoadingFiles] = useState(false);
   const fileInputRef = useRef(null);
 
@@ -43,17 +41,15 @@ export default function FootageUpload({ camera, onSourceChanged }) {
     if (!file) return;
 
     setUploading(true);
-    setError("");
-    setSuccess("");
     setUploadProgress(`Mengupload ${file.name} (${(file.size / (1024 * 1024)).toFixed(1)} MB)...`);
 
     try {
       const result = await uploadFootage(file, { setAsSource: false, cameraId: 1 });
-      setSuccess(`File "${result.filename}" berhasil diupload (${result.size_mb} MB)`);
+      showToast("success", `File "${result.filename}" berhasil diupload (${result.size_mb} MB)`);
       setUploadProgress("");
       await loadFiles();
     } catch (err) {
-      setError(err.message || "Gagal mengupload file");
+      showToast("error", err.message || "Gagal mengupload file");
       setUploadProgress("");
     } finally {
       setUploading(false);
@@ -62,27 +58,23 @@ export default function FootageUpload({ camera, onSourceChanged }) {
   }
 
   async function handleSetSource(filename) {
-    setError("");
-    setSuccess("");
     try {
       const result = await setFootageAsSource(filename, 1);
-      setSuccess(result.message || `Footage "${filename}" diset sebagai sumber kamera`);
+      showToast("success", result.message || `Footage "${filename}" diset sebagai sumber kamera`);
       onSourceChanged?.();
     } catch (err) {
-      setError(err.message || "Gagal mengset footage sebagai sumber");
+      showToast("error", err.message || "Gagal mengset footage sebagai sumber");
     }
   }
 
   async function handleDelete(filename) {
     if (!confirm(`Hapus file "${filename}"?`)) return;
-    setError("");
-    setSuccess("");
     try {
       await deleteFootage(filename);
-      setSuccess(`File "${filename}" berhasil dihapus`);
+      showToast("success", `File "${filename}" berhasil dihapus`);
       await loadFiles();
     } catch (err) {
-      setError(err.message || "Gagal menghapus file");
+      showToast("error", err.message || "Gagal menghapus file");
     }
   }
 
@@ -131,9 +123,6 @@ export default function FootageUpload({ camera, onSourceChanged }) {
           <progress className="progress progress-primary w-full mt-1"></progress>
         </div>
       )}
-
-      {error && <Alert variant="error" className="mb-3">{error}</Alert>}
-      {success && <Alert variant="success" className="mb-3">{success}</Alert>}
 
       {/* File list */}
       <div className="mt-2">

@@ -4,8 +4,8 @@ import { useState } from "react";
 import Input from "@/components/ui/Input";
 import Select from "@/components/ui/Select";
 import Button from "@/components/ui/Button";
-import Alert from "@/components/ui/Alert";
 import Section from "@/components/ui/Section";
+import { useToast } from "@/context/ToastContext";
 
 const ROLE_OPTIONS = [
   { value: "OPERATOR", label: "Operator / Petugas" },
@@ -21,14 +21,13 @@ const ROLE_OPTIONS = [
  * @param {function} [props.onCancel] - called when cancel (edit mode)
  */
 export default function UserForm({ onCreated, user, onSaved, onCancel }) {
+  const { showToast } = useToast();
   const isEdit = !!user;
   const [username, setUsername] = useState(user?.username || "");
   const [fullName, setFullName] = useState(user?.full_name || "");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState(user?.role || "OPERATOR");
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [ok, setOk] = useState("");
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -36,31 +35,28 @@ export default function UserForm({ onCreated, user, onSaved, onCancel }) {
       !fullName.trim() ||
       (!isEdit && (!username.trim() || !password.trim()))
     ) {
-      setError("Semua field wajib diisi");
+      showToast("error", "Semua field wajib diisi");
       return;
     }
     setSaving(true);
-    setError("");
-    setOk("");
     try {
       if (isEdit) {
         // Edit mode
         const payload = { full_name: fullName, role };
         if (password) payload.password = password;
         await onSaved(user.user_id, payload);
-        setOk("User berhasil diupdate");
+        showToast("success", "User berhasil diupdate");
       } else {
         // Create mode
         await onCreated({ username, full_name: fullName, password, role });
-        setOk(`User "${username}" berhasil dibuat`);
+        showToast("success", `User "${username}" berhasil dibuat`);
         setUsername("");
         setFullName("");
         setPassword("");
         setRole("OPERATOR");
-        setTimeout(() => setOk(""), 3000);
       }
     } catch (e) {
-      setError(
+      showToast("error",
         e.message || (isEdit ? "Gagal update user" : "Gagal membuat user"),
       );
     } finally {
@@ -119,8 +115,6 @@ export default function UserForm({ onCreated, user, onSaved, onCancel }) {
             </button>
           )}
         </div>
-        {error && <Alert variant="error">{error}</Alert>}
-        {ok && <Alert variant="success">{ok}</Alert>}
       </form>
     </Section>
   );

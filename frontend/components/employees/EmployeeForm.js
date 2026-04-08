@@ -1,23 +1,22 @@
 "use client";
 
 import { useState } from "react";
-import Alert from "@/components/ui/Alert";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import Section from "@/components/ui/Section";
 import Textarea from "@/components/ui/Textarea";
+import { useToast } from "@/context/ToastContext";
 
 const EMPLOYEE_CODE_MAX_LENGTH = 10;
 
 export default function EmployeeForm({ onCreated, employee, onSaved, onCancel }) {
+  const { showToast } = useToast();
   const isEdit = !!employee;
   const [employeeCode, setEmployeeCode] = useState(employee?.employee_code || "");
   const [fullName, setFullName] = useState(employee?.full_name || "");
   const [notes, setNotes] = useState(employee?.notes || "");
   const [photoFile, setPhotoFile] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [ok, setOk] = useState("");
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -25,17 +24,17 @@ export default function EmployeeForm({ onCreated, employee, onSaved, onCancel })
     const trimmedName = fullName.trim();
 
     if (!trimmedCode || !trimmedName) {
-      setError("Kode pegawai dan nama wajib diisi.");
+      showToast("error", "Kode pegawai dan nama wajib diisi.");
       return;
     }
     if (trimmedCode.length > EMPLOYEE_CODE_MAX_LENGTH) {
-      setError(
+      showToast("error",
         `Kode pegawai maksimal ${EMPLOYEE_CODE_MAX_LENGTH} karakter.`,
       );
       return;
     }
     if (!isEdit && !photoFile) {
-      setError("Foto referensi wajah wajib diunggah.");
+      showToast("error", "Foto referensi wajah wajib diunggah.");
       return;
     }
 
@@ -48,22 +47,20 @@ export default function EmployeeForm({ onCreated, employee, onSaved, onCancel })
     }
 
     setSaving(true);
-    setError("");
-    setOk("");
     try {
       if (isEdit) {
         await onSaved(employee.employee_id, formData);
-        setOk("Data pegawai berhasil diperbarui.");
+        showToast("success", "Data pegawai berhasil diperbarui.");
       } else {
         await onCreated(formData);
-        setOk(`Pegawai "${trimmedName}" berhasil ditambahkan.`);
+        showToast("success", `Pegawai "${trimmedName}" berhasil ditambahkan.`);
         setEmployeeCode("");
         setFullName("");
         setNotes("");
         setPhotoFile(null);
       }
     } catch (err) {
-      setError(err.message || "Gagal menyimpan data pegawai.");
+      showToast("error", err.message || "Gagal menyimpan data pegawai.");
     } finally {
       setSaving(false);
     }
@@ -143,9 +140,6 @@ export default function EmployeeForm({ onCreated, employee, onSaved, onCancel })
             </button>
           )}
         </div>
-
-        {error && <Alert type="error">{error}</Alert>}
-        {ok && <Alert type="success">{ok}</Alert>}
       </form>
     </Section>
   );

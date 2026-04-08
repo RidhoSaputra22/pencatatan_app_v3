@@ -5,18 +5,18 @@ import { updateCamera, discoverCameras } from "@/services/camera.service";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
 import Section from "@/components/ui/Section";
+import { useToast } from "@/context/ToastContext";
 
 /**
  * Form to edit camera settings (name, location, stream_url).
  * Includes "Find Cameras" to detect active video devices on the system.
  */
 export default function CameraForm({ camera, onSaved }) {
+  const { showToast } = useToast();
   const [name, setName] = useState("");
   const [location, setLocation] = useState("");
   const [streamUrl, setStreamUrl] = useState("");
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [ok, setOk] = useState("");
 
   // Camera discovery state
   const [discovering, setDiscovering] = useState(false);
@@ -33,17 +33,16 @@ export default function CameraForm({ camera, onSaved }) {
 
   async function handleDiscover() {
     setDiscovering(true);
-    setError("");
     setDevices([]);
     setShowDevices(true);
     try {
       const found = await discoverCameras();
       setDevices(found);
       if (found.length === 0) {
-        setError("Tidak ditemukan kamera yang aktif di komputer ini.");
+        showToast("warning", "Tidak ditemukan kamera yang aktif di komputer ini.");
       }
     } catch (e) {
-      setError(e.message || "Gagal mendeteksi kamera");
+      showToast("error", e.message || "Gagal mendeteksi kamera");
     } finally {
       setDiscovering(false);
     }
@@ -52,25 +51,23 @@ export default function CameraForm({ camera, onSaved }) {
   function handleSelectDevice(device) {
     setStreamUrl(String(device.index));
     setShowDevices(false);
-    setOk(
+    showToast("success",
       `Kamera "${device.name}" (${device.device}) dipilih — index ${device.index}`,
     );
   }
 
   async function handleSave() {
     setSaving(true);
-    setError("");
-    setOk("");
     try {
       await updateCamera(1, {
         name: name || null,
         location: location || null,
         stream_url: streamUrl || null,
       });
-      setOk("Camera saved. Edge will refresh config automatically.");
+      showToast("success", "Camera saved. Edge will refresh config automatically.");
       onSaved?.();
     } catch (e) {
-      setError(e.message || "Save failed");
+      showToast("error", e.message || "Save failed");
     } finally {
       setSaving(false);
     }
@@ -215,9 +212,6 @@ export default function CameraForm({ camera, onSaved }) {
         <Button variant="primary" loading={saving} onClick={handleSave}>
           Save Camera
         </Button>
-
-        {error && <p className="text-error text-sm">{error}</p>}
-        {ok && <p className="text-success text-sm">{ok}</p>}
       </div>
     </Section>
   );

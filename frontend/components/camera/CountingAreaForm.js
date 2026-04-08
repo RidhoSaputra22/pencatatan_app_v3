@@ -2,17 +2,10 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { createArea, updateArea } from "@/services/camera.service";
-import Input from "@/components/ui/Input";
-import Select from "@/components/ui/Select";
 import Button from "@/components/ui/Button";
 import Section from "@/components/ui/Section";
+import { useToast } from "@/context/ToastContext";
 import RoiEditor from "./RoiEditor";
-
-const DIRECTION_OPTIONS = [
-  { value: "BOTH", label: "BOTH (Masuk & Keluar)" },
-  { value: "IN", label: "IN (Masuk saja)" },
-  { value: "OUT", label: "OUT (Keluar saja)" },
-];
 
 const DEFAULT_ROI = [
   [50, 50],
@@ -26,12 +19,11 @@ const DEFAULT_ROI = [
  * Uses the interactive RoiEditor with live camera feed.
  */
 export default function CountingAreaForm({ areas = [], onSaved }) {
+  const { showToast } = useToast();
   const [areaName, setAreaName] = useState("");
   const [roiPoints, setRoiPoints] = useState(DEFAULT_ROI);
   const [directionMode, setDirectionMode] = useState("BOTH");
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [ok, setOk] = useState("");
   const [showJson, setShowJson] = useState(false);
   const [jsonEdit, setJsonEdit] = useState("");
 
@@ -49,7 +41,6 @@ export default function CountingAreaForm({ areas = [], onSaved }) {
 
   const handleRoiChange = useCallback((pts) => {
     setRoiPoints(pts);
-    setOk("");
   }, []);
 
   // Toggle manual JSON editing
@@ -72,11 +63,9 @@ export default function CountingAreaForm({ areas = [], onSaved }) {
 
   async function handleSave() {
     setSaving(true);
-    setError("");
-    setOk("");
 
     if (roiPoints.length < 3) {
-      setError("ROI minimal 3 titik. Klik pada kamera untuk menambah titik.");
+      showToast("error", "ROI minimal 3 titik. Klik pada kamera untuk menambah titik.");
       setSaving(false);
       return;
     }
@@ -96,10 +85,10 @@ export default function CountingAreaForm({ areas = [], onSaved }) {
           direction_mode: directionMode,
         });
       }
-      setOk("Counting area saved! Edge akan refresh config otomatis.");
+      showToast("success", "Counting area saved! Edge akan refresh config otomatis.");
       onSaved?.();
     } catch (e) {
-      setError(e.message || "Save failed");
+      showToast("error", e.message || "Save failed");
     } finally {
       setSaving(false);
     }
@@ -122,30 +111,10 @@ export default function CountingAreaForm({ areas = [], onSaved }) {
             <Button variant="primary" loading={saving} onClick={handleSave}>
               Save Counting Area
             </Button>
-
-            {error && <p className="text-error text-sm">{error}</p>}
-            {ok && <p className="text-success text-sm">{ok}</p>}
           </div>
           <RoiEditor points={roiPoints} onChange={handleRoiChange} />
         </div>
-        {/* Name & Direction */}
-        {/* <div className="flex-1">
-          <div className="space-y-5 mb-4">
-            <Input
-              label="Nama Area"
-              value={areaName}
-              onChange={(e) => setAreaName(e.target.value)}
-              placeholder="Masukkan nama area"
-            />
-            <Select
-              label="Direction Mode"
-              options={DIRECTION_OPTIONS}
-              value={directionMode}
-              onChange={(e) => setDirectionMode(e.target.value)}
-            />
-          </div>
-
-          </div> */}
+      
       </div>
     </Section>
   );

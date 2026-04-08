@@ -1,29 +1,22 @@
 "use client";
 
-import { useState } from "react";
 import Table from "@/components/ui/Table";
 import Section from "@/components/ui/Section";
-import Button from "@/components/ui/Button";
-import Alert from "@/components/ui/Alert";
-import UserForm from "@/components/users/UserForm";
-
-const ROLE_OPTIONS = [
-  { value: "OPERATOR", label: "Operator" },
-  { value: "ADMIN", label: "Admin" },
-];
+import { useToast } from "@/context/ToastContext";
 
 /**
  * Table listing all users with edit/deactivate actions.
  */
 export default function UserTable({ users = [], onDelete, onEditClick }) {
-  const [error, setError] = useState("");
+  const { showToast } = useToast();
 
   async function handleDelete(user) {
     if (!confirm(`Yakin ingin menonaktifkan user "${user.username}"?`)) return;
     try {
       await onDelete(user.user_id);
+      showToast("success", `User "${user.username}" berhasil dinonaktifkan`);
     } catch (e) {
-      setError(e.message || "Gagal menonaktifkan user");
+      showToast("error", e.message || "Gagal menonaktifkan user");
     }
   }
 
@@ -62,7 +55,6 @@ export default function UserTable({ users = [], onDelete, onEditClick }) {
 
   return (
     <Section title="Daftar Pengguna">
-      {error && <Alert variant="error">{error}</Alert>}
       <Table columns={columns} rows={rows} emptyText="Belum ada pengguna." />
     </Section>
   );

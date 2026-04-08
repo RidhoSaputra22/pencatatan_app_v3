@@ -1,20 +1,20 @@
 "use client";
 
 import { formatDateTime } from "@/lib/utils";
-import Alert from "@/components/ui/Alert";
 import Section from "@/components/ui/Section";
 import Table from "@/components/ui/Table";
-import { useState } from "react";
+import { useToast } from "@/context/ToastContext";
 
 export default function EmployeeTable({ employees = [], onDelete, onEditClick }) {
-  const [error, setError] = useState("");
+  const { showToast } = useToast();
 
   async function handleDeactivate(employee) {
     if (!confirm(`Nonaktifkan pegawai "${employee.full_name}"?`)) return;
     try {
       await onDelete(employee.employee_id);
+      showToast("success", `Pegawai "${employee.full_name}" berhasil dinonaktifkan.`);
     } catch (e) {
-      setError(e.message || "Gagal menonaktifkan pegawai.");
+      showToast("error", e.message || "Gagal menonaktifkan pegawai.");
     }
   }
 
@@ -67,7 +67,6 @@ export default function EmployeeTable({ employees = [], onDelete, onEditClick })
 
   return (
     <Section title="Daftar Pegawai">
-      {error && <Alert type="error">{error}</Alert>}
       <Table
         columns={columns}
         rows={rows}

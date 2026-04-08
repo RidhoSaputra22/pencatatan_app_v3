@@ -83,7 +83,7 @@ export default function CameraPage() {
       {/* Client Streaming Status */}
       <StreamingStatus />
 
-      <ConfigPreview camera={camera} areas={areas} />
+      
     </>
   );
 }
