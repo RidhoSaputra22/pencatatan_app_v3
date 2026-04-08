@@ -12,6 +12,8 @@ import { useState } from "react";
  */
 export default function ProtectedLayout({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const currentYear = new Date().getFullYear();
+
   return (
     <AuthGuard>
       <div className="flex flex-col min-h-screen bg-gray-50">
