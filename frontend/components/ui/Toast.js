@@ -48,7 +48,7 @@ export default function Toast({
             key={t.id || i}
             type={t.type || t.variant || "info"}
             dismissible={t.dismissible}
-            className={`max-w-sm shadow-lg ${t.className || ""}`}
+            className={`w-full shadow-lg ${t.className || ""}`}
           >
             {t.message}
           </Alert>

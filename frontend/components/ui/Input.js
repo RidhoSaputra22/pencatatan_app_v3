@@ -43,13 +43,6 @@ export default function Input({
           </span>
         </label>
       )}
-      {helpText && !error && (
-        <label className="label">
-          <span className="text-sm font-light label-text-alt text-base-content/70">
-            - {helpText}
-          </span>
-        </label>
-      )}
       {type === "password" ? (
         <div className="relative">
           <input
@@ -118,6 +111,11 @@ export default function Input({
           className={`input input-bordered w-full${error ? " input-error" : ""} ${className}`}
           {...rest}
         />
+      )}
+      {helpText && !error && (
+        <label className="label pb-0 pt-1">
+          <span className="label-text-alt text-base-content/70">{helpText}</span>
+        </label>
       )}
       {error && (
         <label className="label">
