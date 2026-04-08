@@ -107,25 +107,9 @@ export default function CountingAreaForm({ areas = [], onSaved }) {
 
   return (
     <Section title="Area Hitung (Counting Area)">
-      <div className="grid gap-4">
-        {/* Name & Direction */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <Input
-            label="Nama Area"
-            value={areaName}
-            onChange={(e) => setAreaName(e.target.value)}
-            placeholder="Masukkan nama area"
-          />
-          <Select
-            label="Direction Mode"
-            options={DIRECTION_OPTIONS}
-            value={directionMode}
-            onChange={(e) => setDirectionMode(e.target.value)}
-          />
-        </div>
-
+      <div className="">
         {/* Interactive ROI Editor with live camera feed */}
-        <div>
+        <div className="">
           <div className="flex items-center justify-between mb-2">
             <label className="label-text font-semibold ">
               ROI Polygon — Klik pada kamera untuk menambah titik
@@ -134,36 +118,34 @@ export default function CountingAreaForm({ areas = [], onSaved }) {
               type="button"
               className="btn btn-xs btn-ghost"
               onClick={toggleJsonEdit}
-            >
-              {showJson ? "✓ Terapkan JSON" : "{ } Edit JSON"}
-            </button>
+            ></button>
+            <Button variant="primary" loading={saving} onClick={handleSave}>
+              Save Counting Area
+            </Button>
+
+            {error && <p className="text-error text-sm">{error}</p>}
+            {ok && <p className="text-success text-sm">{ok}</p>}
           </div>
           <RoiEditor points={roiPoints} onChange={handleRoiChange} />
         </div>
-
-        {/* Optional JSON editor */}
-        {showJson && (
-          <div>
-            <textarea
-              className="textarea textarea-bordered w-full font-mono text-xs"
-              rows={4}
-              value={jsonEdit}
-              onChange={(e) => setJsonEdit(e.target.value)}
-              placeholder='[[50,50],[1230,50],[1230,670],[50,670]]'
+        {/* Name & Direction */}
+        {/* <div className="flex-1">
+          <div className="space-y-5 mb-4">
+            <Input
+              label="Nama Area"
+              value={areaName}
+              onChange={(e) => setAreaName(e.target.value)}
+              placeholder="Masukkan nama area"
             />
-            <p className="text-xs opacity-50 mt-1">
-              Edit JSON secara manual, lalu klik "Terapkan JSON" untuk meng-update visual.
-            </p>
+            <Select
+              label="Direction Mode"
+              options={DIRECTION_OPTIONS}
+              value={directionMode}
+              onChange={(e) => setDirectionMode(e.target.value)}
+            />
           </div>
-        )}
 
-        {/* Save button */}
-        <Button variant="secondary" loading={saving} onClick={handleSave}>
-          Save Counting Area
-        </Button>
-
-        {error && <p className="text-error text-sm">{error}</p>}
-        {ok && <p className="text-success text-sm">{ok}</p>}
+          </div> */}
       </div>
     </Section>
   );

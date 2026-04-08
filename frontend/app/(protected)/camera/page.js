@@ -20,14 +20,12 @@ export default function CameraPage() {
   return (
     <>
       <Heading level={1}>Konfigurasi Kamera</Heading>
-      <div className="flex flex-col lg:flex-row gap-3">
-       
+      <div className="">
 
         {error && <Alert variant="error">{error}</Alert>}
 
         {isAdmin ? (
           <>
-            <CameraForm camera={camera} onSaved={reload} />
             <CountingAreaForm areas={areas} onSaved={reload} />
           </>
         ) : (

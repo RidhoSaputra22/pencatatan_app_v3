@@ -20,8 +20,12 @@ export default function ProtectedLayout({ children }) {
         <Navbar onMenuClick={setSidebarOpen} />
         <div className="flex flex-1 min-h-0">
           <Sidebar mobileOpen={sidebarOpen} setMobileOpen={setSidebarOpen} />
-          <main className="flex-1 min-h-screen px-2 sm:px-4 lg:px-6 py-8">
-            {children}
+          <main className="flex flex-1 min-h-screen flex-col px-3 py-6 sm:px-4 lg:px-8 lg:py-8">
+            <div className="flex-1">{children}</div>
+            <footer className="mt-10 border-t border-slate-200/80 pt-4 text-center text-xs text-slate-500">
+              © {currentYear} Pencatatan Pengunjung. Universitas Kristen
+              Indonesia Paulus.
+            </footer>
           </main>
         </div>
       </div>

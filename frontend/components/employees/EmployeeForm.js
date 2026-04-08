@@ -7,6 +7,8 @@ import Input from "@/components/ui/Input";
 import Section from "@/components/ui/Section";
 import Textarea from "@/components/ui/Textarea";
 
+const EMPLOYEE_CODE_MAX_LENGTH = 10;
+
 export default function EmployeeForm({ onCreated, employee, onSaved, onCancel }) {
   const isEdit = !!employee;
   const [employeeCode, setEmployeeCode] = useState(employee?.employee_code || "");
@@ -19,8 +21,17 @@ export default function EmployeeForm({ onCreated, employee, onSaved, onCancel })
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!employeeCode.trim() || !fullName.trim()) {
+    const trimmedCode = employeeCode.trim();
+    const trimmedName = fullName.trim();
+
+    if (!trimmedCode || !trimmedName) {
       setError("Kode pegawai dan nama wajib diisi.");
+      return;
+    }
+    if (trimmedCode.length > EMPLOYEE_CODE_MAX_LENGTH) {
+      setError(
+        `Kode pegawai maksimal ${EMPLOYEE_CODE_MAX_LENGTH} karakter.`,
+      );
       return;
     }
     if (!isEdit && !photoFile) {
@@ -29,8 +40,8 @@ export default function EmployeeForm({ onCreated, employee, onSaved, onCancel })
     }
 
     const formData = new FormData();
-    formData.append("employee_code", employeeCode.trim());
-    formData.append("full_name", fullName.trim());
+    formData.append("employee_code", trimmedCode);
+    formData.append("full_name", trimmedName);
     formData.append("notes", notes.trim());
     if (photoFile) {
       formData.append("photo", photoFile);
@@ -45,7 +56,7 @@ export default function EmployeeForm({ onCreated, employee, onSaved, onCancel })
         setOk("Data pegawai berhasil diperbarui.");
       } else {
         await onCreated(formData);
-        setOk(`Pegawai "${fullName.trim()}" berhasil ditambahkan.`);
+        setOk(`Pegawai "${trimmedName}" berhasil ditambahkan.`);
         setEmployeeCode("");
         setFullName("");
         setNotes("");
@@ -65,8 +76,12 @@ export default function EmployeeForm({ onCreated, employee, onSaved, onCancel })
           <Input
             label="Kode Pegawai"
             value={employeeCode}
-            onChange={(e) => setEmployeeCode(e.target.value)}
+            onChange={(e) =>
+              setEmployeeCode(e.target.value.slice(0, EMPLOYEE_CODE_MAX_LENGTH))
+            }
             placeholder="PGW-001"
+            helpText={`Maksimal ${EMPLOYEE_CODE_MAX_LENGTH} karakter.`}
+            maxLength={EMPLOYEE_CODE_MAX_LENGTH}
             required
           />
           <Input
@@ -77,6 +92,9 @@ export default function EmployeeForm({ onCreated, employee, onSaved, onCancel })
             required
           />
         </div>
+        <p className="text-xs text-base-content/60">
+          Panjang kode pegawai: {employeeCode.length}/{EMPLOYEE_CODE_MAX_LENGTH}
+        </p>
 
         <div className="grid gap-2">
           <label className="label">

@@ -67,7 +67,7 @@ class Employee(SQLModel, table=True):
     __tablename__ = "employees"
 
     employee_id: Optional[int] = Field(default=None, primary_key=True)
-    employee_code: str = Field(unique=True, index=True, max_length=60)
+    employee_code: str = Field(unique=True, index=True, max_length=10)
     full_name: str = Field(max_length=120)
     face_embedding: Optional[Any] = Field(default=None, sa_column=Column(JSON))
     face_image_path: Optional[str] = Field(default=None, sa_column=Column(Text))

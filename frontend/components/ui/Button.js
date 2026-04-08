@@ -45,7 +45,7 @@ export default function Button({
       lg: "btn-lg",
     }[size] || "";
 
-  let classes = `btn ${variantClass} ${sizeClass} gap-2`;
+  let classes = `btn ${variantClass} ${sizeClass} gap-2 `;
   if (outline) classes += " btn-outline";
   if (className) classes += ` ${className}`;
 

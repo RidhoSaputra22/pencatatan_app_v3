@@ -60,6 +60,7 @@ app.mount("/storage/footage", StaticFiles(directory=str(FOOTAGE_DIR)), name="foo
 # UDP Stream Relay configuration
 UDP_RELAY_HOST = os.getenv("UDP_RELAY_HOST", "0.0.0.0")
 UDP_RELAY_PORT = int(os.getenv("UDP_RELAY_PORT", "9999"))
+EMPLOYEE_CODE_MAX_LENGTH = 10
 
 
 # ==================== Pydantic Schemas ====================
@@ -472,6 +473,11 @@ async def create_employee(
     notes = notes.strip() if notes else None
     if not employee_code or not full_name:
         raise HTTPException(status_code=400, detail="Kode pegawai dan nama wajib diisi")
+    if len(employee_code) > EMPLOYEE_CODE_MAX_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Kode pegawai maksimal {EMPLOYEE_CODE_MAX_LENGTH} karakter",
+        )
 
     existing = session.exec(
         select(Employee).where(Employee.employee_code == employee_code)
@@ -530,6 +536,11 @@ async def update_employee(
         employee_code = employee_code.strip()
         if not employee_code:
             raise HTTPException(status_code=400, detail="Kode pegawai tidak boleh kosong")
+        if len(employee_code) > EMPLOYEE_CODE_MAX_LENGTH:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Kode pegawai maksimal {EMPLOYEE_CODE_MAX_LENGTH} karakter",
+            )
         existing = session.exec(
             select(Employee).where(
                 Employee.employee_code == employee_code,

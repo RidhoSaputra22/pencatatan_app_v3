@@ -570,34 +570,8 @@ export default function RoiEditor({ points = [], onChange }) {
         </div>
       </div>
 
-      {/* Point list (compact) */}
-      {pts.length > 0 && (
-        <div className="bg-base-200 rounded-sm p-3">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold opacity-70">
-              Koordinat Titik ROI ({NATIVE_W}×{NATIVE_H})
-            </span>
-            <span className="text-xs opacity-50 font-mono">
-              {JSON.stringify(pts)}
-            </span>
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {pts.map(([x, y], i) => (
-              <span
-                key={i}
-                className="badge badge-sm badge-outline font-mono cursor-pointer hover:badge-error"
-                title="Klik untuk hapus"
-                onClick={() => {
-                  pushHistory();
-                  commit(pts.filter((_, j) => j !== i));
-                }}
-              >
-                P{i + 1}: [{x},{y}]
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
+      
+     
     </div>
   );
 }
