@@ -1,6 +1,7 @@
 "use client";
 
 import { useAuth } from "@/context/AuthContext";
+import Image from "next/image";
 
 export default function Navbar({ onMenuClick }) {
   const { user, logout } = useAuth();
@@ -27,9 +28,21 @@ export default function Navbar({ onMenuClick }) {
             />
           </svg>
         </button>
-        <span className="font-bold text-lg tracking-wide select-none text-xl font-bold text-success">
-          Visitor Monitoring
-        </span>
+        <div className="flex gap-4 items-center">
+          <Image
+            src="/images/logo.png"
+            alt="Pencatatan Pengunjung"
+            width={100}
+            height={100}
+            className="w-auto h-10 "
+          />
+          <span className="font-bold select-none text-primary">
+            <p className="text-xl font-bold tracking-wide">
+              Pencatatan Pengunjung
+            </p>
+            <p className="font-light">Universitas Kristen Indonesia Paulus</p>
+          </span>
+        </div>
       </div>
       <div className="hidden lg:flex items-center gap-6">
         {/* Tambahkan menu/topbar lain di sini jika perlu */}

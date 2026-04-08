@@ -41,13 +41,12 @@ export default function Button({
     {
       xs: "btn-xs",
       sm: "btn-sm",
-      lg: "",
+      md: "",
       lg: "btn-lg",
     }[size] || "";
 
-  let classes = `btn ${variantClass} ${sizeClass}`;
+  let classes = `btn ${variantClass} ${sizeClass} gap-2`;
   if (outline) classes += " btn-outline";
-  if (loading) classes += " loading";
   if (className) classes += ` ${className}`;
 
   const content = (
@@ -70,6 +69,7 @@ export default function Button({
       type={isSubmit ? "submit" : "button"}
       className={classes}
       disabled={disabled || loading}
+      aria-busy={loading}
       {...rest}
     >
       {content}

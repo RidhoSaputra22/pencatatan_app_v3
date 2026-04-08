@@ -36,8 +36,8 @@ export const STREAM_RELAY_HEALTH_URL =
   process.env.NEXT_PUBLIC_STREAM_RELAY_HEALTH_URL || joinUrl(API_BASE, "/stream/relay/health");
 
 // Application Configuration
-export const APP_NAME = "Visitor Monitoring System";
-export const APP_VERSION = "1.0.0";
+export const APP_NAME = "Pencatatan Pengunjung System";
+export const APP_VERSION = "1.2.0";
 
 // Roles
 export const ROLE_ADMIN = "ADMIN";

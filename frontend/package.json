@@ -2,7 +2,7 @@
   "name": "visitor-monitoring-frontend",
   "private": true,
   "version": "1.0.0",
-  "description": "Frontend untuk Visitor Monitoring System",
+  "description": "Frontend untuk Pencatatan Pengunjung System",
   "scripts": {
     "dev": "node ./scripts/next-with-root-env.mjs dev",
     "build": "node ./scripts/next-with-root-env.mjs build",

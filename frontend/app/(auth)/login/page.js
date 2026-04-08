@@ -7,6 +7,7 @@ import { useAuth } from "@/context/AuthContext";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
 import Alert from "@/components/ui/Alert";
+import Image from "next/image";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -26,7 +27,7 @@ export default function LoginPage() {
       authLogin(data.access_token);
       router.push("/dashboard");
     } catch (e2) {
-      setErr(e2.message || "Login failed");
+      setErr("Login gagal, cek kembali username dan password");
     } finally {
       setLoading(false);
     }
@@ -35,9 +36,21 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-base-200">
       <div className="card bg-base-100 shadow-xl w-full max-w-md p-8">
-        <h1 className="text-2xl font-bold text-success mb-1">Visitor Monitoring</h1>
-        <p className="text-sm opacity-60 mb-6">Login untuk mengakses dashboard</p>
-
+        <div className="flex gap-3">
+          <Image
+            src="/images/logo.png"
+            alt="Pencatatan Pengunjung"
+            width={100}
+            height={100}
+            className="w-auto h-14 mb-4"
+          />
+          <div>
+            <h1 className="text-2xl font-bold ">Pencatatan Pengunjung</h1>
+            <p className="text-sm opacity-60 mb-6">
+              Login untuk mengakses dashboard
+            </p>
+          </div>
+        </div>
         <form onSubmit={onSubmit} className="grid gap-4">
           <Input
             label="Username"
@@ -52,7 +65,7 @@ export default function LoginPage() {
             onChange={(e) => setPassword(e.target.value)}
           />
           <Button variant="primary" loading={loading} className="w-full">
-            Sign in
+            Masuk
           </Button>
           {err && <Alert variant="error">{err}</Alert>}
         </form>

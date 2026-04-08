@@ -2,7 +2,7 @@ import "./globals.css";
 import { AuthProvider } from "@/context/AuthContext";
 
 export const metadata = {
-  title: "Visitor Monitoring",
+  title: "Pencatatan Pengunjung",
   description: "Monitoring jumlah pengunjung perpustakaan",
   icons: {},
 };

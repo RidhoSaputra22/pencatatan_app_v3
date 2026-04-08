@@ -143,7 +143,7 @@ export default function Sidebar({ mobileOpen = false, setMobileOpen }) {
             className="text-xl font-bold text-success"
             onClick={() => setMobileOpen(false)}
           >
-            Visitor Monitoring
+            Pencatatan Pengunjung
           </Link>
           <button
             className="ml-2"
