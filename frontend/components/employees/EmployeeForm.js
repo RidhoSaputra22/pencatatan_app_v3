@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import Section from "@/components/ui/Section";
@@ -9,14 +9,68 @@ import { useToast } from "@/context/ToastContext";
 
 const EMPLOYEE_CODE_MAX_LENGTH = 10;
 
+function resolveEmployeePhotoUrl(path) {
+  if (!path) {
+    return "";
+  }
+
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+
+  const normalizedPath = path.replace(/\\/g, "/");
+  const storageIndex = normalizedPath.toLowerCase().lastIndexOf("/storage/");
+  if (storageIndex >= 0) {
+    return normalizedPath.slice(storageIndex);
+  }
+
+  if (normalizedPath.toLowerCase().startsWith("storage/")) {
+    return `/${normalizedPath}`;
+  }
+
+  return normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`;
+}
+
 export default function EmployeeForm({ onCreated, employee, onSaved, onCancel }) {
   const { showToast } = useToast();
   const isEdit = !!employee;
+  const fileInputRef = useRef(null);
   const [employeeCode, setEmployeeCode] = useState(employee?.employee_code || "");
   const [fullName, setFullName] = useState(employee?.full_name || "");
   const [notes, setNotes] = useState(employee?.notes || "");
   const [photoFile, setPhotoFile] = useState(null);
+  const [photoObjectUrl, setPhotoObjectUrl] = useState("");
+  const [previewLoadFailed, setPreviewLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
+  const storedPhotoUrl = resolveEmployeePhotoUrl(employee?.face_image_path);
+  const photoPreviewUrl = photoObjectUrl || storedPhotoUrl;
+  const isShowingStoredPhoto = !photoObjectUrl && !!storedPhotoUrl;
+  const canRenderPreview = !!photoPreviewUrl && !previewLoadFailed;
+
+  useEffect(() => {
+    if (!photoFile) {
+      setPhotoObjectUrl("");
+      return;
+    }
+
+    const nextObjectUrl = URL.createObjectURL(photoFile);
+    setPhotoObjectUrl(nextObjectUrl);
+
+    return () => {
+      URL.revokeObjectURL(nextObjectUrl);
+    };
+  }, [photoFile]);
+
+  useEffect(() => {
+    setPreviewLoadFailed(false);
+  }, [photoPreviewUrl]);
+
+  function clearSelectedPhoto() {
+    setPhotoFile(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -57,7 +111,7 @@ export default function EmployeeForm({ onCreated, employee, onSaved, onCancel })
         setEmployeeCode("");
         setFullName("");
         setNotes("");
-        setPhotoFile(null);
+        clearSelectedPhoto();
       }
     } catch (err) {
       showToast("error", err.message || "Gagal menyimpan data pegawai.");
@@ -101,6 +155,7 @@ export default function EmployeeForm({ onCreated, employee, onSaved, onCancel })
             </span>
           </label>
           <input
+            ref={fileInputRef}
             type="file"
             accept="image/*"
             className="file-input file-input-bordered w-full"
@@ -113,7 +168,53 @@ export default function EmployeeForm({ onCreated, employee, onSaved, onCancel })
             <p className="text-sm text-success">Embedding wajah pegawai sudah tersimpan.</p>
           )}
           {photoFile && (
-            <p className="text-sm text-info">File dipilih: {photoFile.name}</p>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-info">File dipilih: {photoFile.name}</p>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm w-fit"
+                onClick={clearSelectedPhoto}
+                disabled={saving}
+              >
+                Batalkan pilihan foto
+              </button>
+            </div>
+          )}
+          {(photoPreviewUrl || (isEdit && employee?.has_face_embedding)) && (
+            <div className="rounded-box border border-base-300 bg-base-200/30 p-3">
+              <p className="text-sm font-medium text-base-content">
+                {isShowingStoredPhoto ? "Foto referensi tersimpan" : "Preview foto baru"}
+              </p>
+              <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-start">
+                {canRenderPreview ? (
+                  <img
+                    src={photoPreviewUrl}
+                    alt={
+                      isShowingStoredPhoto
+                        ? `Foto referensi ${fullName || employee?.full_name || "pegawai"}`
+                        : `Preview upload ${photoFile?.name || "foto pegawai"}`
+                    }
+                    className="h-56 w-full max-w-xs rounded-xl border border-base-300 bg-base-100 object-cover shadow-sm"
+                    onError={() => setPreviewLoadFailed(true)}
+                  />
+                ) : (
+                  <div className="flex h-56 w-full max-w-xs items-center justify-center rounded-xl border border-dashed border-base-300 bg-base-100 px-4 text-center text-sm text-base-content/60">
+                    {isShowingStoredPhoto
+                      ? "Foto referensi tersimpan, tetapi file gambar belum bisa dimuat."
+                      : "Preview foto belum bisa ditampilkan."}
+                  </div>
+                )}
+                <div className="grid gap-1 text-sm text-base-content/70">
+                 
+                  {photoFile && <p>Nama file: {photoFile.name}</p>}
+                  {previewLoadFailed && isShowingStoredPhoto && (
+                    <p className="text-warning">
+                      Pastikan backend dan proxy frontend sudah dimuat ulang agar path `/storage/...` aktif.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
           )}
         </div>
 

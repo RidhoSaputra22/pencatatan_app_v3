@@ -42,7 +42,7 @@ export default function EmployeesPage() {
             Data pegawai digunakan edge worker untuk memeriksa wajah dan
             mengabaikan pegawai dari hitungan pelanggan. Pegawai aktif:{" "}
             <strong>{activeEmployees}</strong> dari <strong>{employees.length}</strong>.
-            Kode pegawai dibatasi maksimal 10 karakter.
+            
           </Paragraph>
         </div>
         <Link href="/employees/create" className="btn btn-primary w-fit">

@@ -100,33 +100,7 @@ export default function StatsTable({ daily = [] }) {
         Data diperbarui otomatis setiap 5 detik.
       </p>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat
-          title="Baris Statistik"
-          value={formatNumber(filteredDaily.length)}
-          description="Jumlah baris yang sedang tampil"
-          tone="neutral"
-        />
-        <Stat
-          title="Total Aktivitas"
-          value={formatNumber(totalEvents)}
-          description="Akumulasi semua event terfilter"
-          tone="primary"
-        />
-        <Stat
-          title="Pengunjung Unik"
-          value={formatNumber(totalVisitors)}
-          description="Akumulasi pengunjung unik terfilter"
-          tone="info"
-        />
-        <Stat
-          title="Masuk / Keluar"
-          value={`${formatNumber(totalIn)} / ${formatNumber(totalOut)}`}
-          description="Ringkasan arah pergerakan"
-          tone="success"
-        />
-      </div>
-
+      
       <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
         <Input
           label="Cari Data"

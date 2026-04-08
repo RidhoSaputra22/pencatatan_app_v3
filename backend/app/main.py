@@ -45,6 +45,8 @@ app = FastAPI(title="Visitor Monitoring API", version="1.0.0")
 # Footage storage directory
 FOOTAGE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / "storage" / "footage"
 FOOTAGE_DIR.mkdir(parents=True, exist_ok=True)
+EMPLOYEE_FACES_DIR = Path(settings.employee_faces_dir)
+EMPLOYEE_FACES_DIR.mkdir(parents=True, exist_ok=True)
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,6 +58,11 @@ app.add_middleware(
 
 # Serve uploaded footage files as static
 app.mount("/storage/footage", StaticFiles(directory=str(FOOTAGE_DIR)), name="footage")
+app.mount(
+    "/storage/employee_faces",
+    StaticFiles(directory=str(EMPLOYEE_FACES_DIR)),
+    name="employee_faces",
+)
 
 # UDP Stream Relay configuration
 UDP_RELAY_HOST = os.getenv("UDP_RELAY_HOST", "0.0.0.0")
