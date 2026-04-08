@@ -1,4 +1,4 @@
-import { Line, Bar, Doughnut } from "react-chartjs-2";
+import { Line, Bar, Doughnut, Radar, PolarArea } from "react-chartjs-2";
 import { useEffect, useRef, useState, useMemo } from "react";
 import { fetchStatsPerSecond } from "@/services/stats.service";
 import { formatNumber } from "@/lib/utils";
@@ -13,6 +13,7 @@ import {
   Filler,
   Tooltip,
   Legend,
+  RadialLinearScale,
 } from "chart.js";
 
 ChartJS.register(
@@ -22,6 +23,7 @@ ChartJS.register(
   LineElement,
   BarElement,
   ArcElement,
+  RadialLinearScale,
   Filler,
   Tooltip,
   Legend,
@@ -358,4 +360,258 @@ export function DoughnutChart({
   };
 
   return <Doughnut data={chartData} options={options} />;
+}
+
+/* ============================================================
+   NEW CHART TYPES — Added for richer dashboard visuals
+   ============================================================ */
+
+// ---- Area Chart: Masuk vs Keluar overlay ----
+export function AreaChart({ labels, dataIn, dataOut }) {
+  const chartRef = useRef(null);
+
+  const chartData = {
+    labels,
+    datasets: [
+      {
+        label: "Masuk",
+        data: dataIn,
+        fill: true,
+        borderColor: "#22c55e",
+        backgroundColor: (context) => {
+          const chart = context.chart;
+          const { ctx, chartArea } = chart;
+          if (!chartArea) return "rgba(34,197,94,0.15)";
+          return createGradient(ctx, chartArea, "rgba(34,197,94,0.35)", "rgba(34,197,94,0.02)");
+        },
+        pointBackgroundColor: "#22c55e",
+        pointBorderColor: "#fff",
+        pointBorderWidth: 2,
+        pointRadius: 3,
+        pointHoverRadius: 6,
+        tension: 0.4,
+        borderWidth: 2,
+      },
+      {
+        label: "Keluar",
+        data: dataOut,
+        fill: true,
+        borderColor: "#ef4444",
+        backgroundColor: (context) => {
+          const chart = context.chart;
+          const { ctx, chartArea } = chart;
+          if (!chartArea) return "rgba(239,68,68,0.15)";
+          return createGradient(ctx, chartArea, "rgba(239,68,68,0.25)", "rgba(239,68,68,0.02)");
+        },
+        pointBackgroundColor: "#ef4444",
+        pointBorderColor: "#fff",
+        pointBorderWidth: 2,
+        pointRadius: 3,
+        pointHoverRadius: 6,
+        tension: 0.4,
+        borderWidth: 2,
+      },
+    ],
+  };
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: true,
+    interaction: { mode: "index", intersect: false },
+    plugins: {
+      legend: {
+        position: "bottom",
+        labels: { font: { size: 11, weight: "500" }, padding: 16, usePointStyle: true, pointStyle: "circle" },
+      },
+      tooltip: {
+        backgroundColor: "rgba(30, 30, 40, 0.9)",
+        titleFont: { size: 12, weight: "bold" },
+        bodyFont: { size: 11 },
+        padding: 12,
+        cornerRadius: 8,
+        callbacks: {
+          label: (ctx) => `${ctx.dataset.label}: ${formatNumber(ctx.parsed.y)}`,
+        },
+      },
+    },
+    scales: {
+      x: {
+        grid: { display: false },
+        ticks: { font: { size: 10 }, maxTicksLimit: 10, color: "#9ca3af" },
+        border: { display: false },
+      },
+      y: {
+        grid: { color: "rgba(229, 231, 235, 0.3)", drawBorder: false },
+        beginAtZero: true,
+        ticks: { font: { size: 10 }, color: "#9ca3af", padding: 8 },
+        border: { display: false },
+      },
+    },
+  };
+
+  return <Line ref={chartRef} data={chartData} options={options} />;
+}
+
+// ---- Horizontal Bar Chart ----
+export function HorizontalBarChart({ labels, data, label = "Total" }) {
+  const colors = ["#6366f1", "#06b6d4", "#f59e42", "#22c55e", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6"];
+
+  const chartData = {
+    labels,
+    datasets: [
+      {
+        label,
+        data,
+        backgroundColor: labels.map((_, i) => colors[i % colors.length] + "cc"),
+        hoverBackgroundColor: labels.map((_, i) => colors[i % colors.length]),
+        borderRadius: 6,
+        borderSkipped: false,
+        barThickness: 20,
+      },
+    ],
+  };
+
+  const options = {
+    indexAxis: "y",
+    responsive: true,
+    maintainAspectRatio: true,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: "rgba(30, 30, 40, 0.9)",
+        titleFont: { size: 12, weight: "bold" },
+        bodyFont: { size: 11 },
+        padding: 12,
+        cornerRadius: 8,
+        callbacks: {
+          label: (ctx) => `${ctx.dataset.label}: ${formatNumber(ctx.parsed.x)}`,
+        },
+      },
+    },
+    scales: {
+      x: {
+        grid: { color: "rgba(229, 231, 235, 0.3)", drawBorder: false },
+        beginAtZero: true,
+        ticks: { font: { size: 10 }, color: "#9ca3af" },
+        border: { display: false },
+      },
+      y: {
+        grid: { display: false },
+        ticks: { font: { size: 11, weight: "500" }, color: "#9ca3af" },
+        border: { display: false },
+      },
+    },
+  };
+
+  return <Bar data={chartData} options={options} />;
+}
+
+// ---- Radar Chart: Hourly activity pattern ----
+export function RadarChart({ labels, dataIn, dataOut }) {
+  const chartData = {
+    labels,
+    datasets: [
+      {
+        label: "Masuk",
+        data: dataIn,
+        backgroundColor: "rgba(34, 197, 94, 0.15)",
+        borderColor: "#22c55e",
+        borderWidth: 2,
+        pointBackgroundColor: "#22c55e",
+        pointBorderColor: "#fff",
+        pointBorderWidth: 1,
+        pointRadius: 3,
+        pointHoverRadius: 5,
+      },
+      {
+        label: "Keluar",
+        data: dataOut,
+        backgroundColor: "rgba(239, 68, 68, 0.15)",
+        borderColor: "#ef4444",
+        borderWidth: 2,
+        pointBackgroundColor: "#ef4444",
+        pointBorderColor: "#fff",
+        pointBorderWidth: 1,
+        pointRadius: 3,
+        pointHoverRadius: 5,
+      },
+    ],
+  };
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: true,
+    plugins: {
+      legend: {
+        position: "bottom",
+        labels: { font: { size: 11, weight: "500" }, padding: 16, usePointStyle: true, pointStyle: "circle" },
+      },
+      tooltip: {
+        backgroundColor: "rgba(30, 30, 40, 0.9)",
+        titleFont: { size: 12, weight: "bold" },
+        bodyFont: { size: 11 },
+        padding: 12,
+        cornerRadius: 8,
+      },
+    },
+    scales: {
+      r: {
+        angleLines: { color: "rgba(229, 231, 235, 0.3)" },
+        grid: { color: "rgba(229, 231, 235, 0.3)" },
+        pointLabels: { font: { size: 10, weight: "500" }, color: "#9ca3af" },
+        ticks: { display: false },
+        beginAtZero: true,
+      },
+    },
+  };
+
+  return <Radar data={chartData} options={options} />;
+}
+
+// ---- Polar Area Chart: Distribution by time segments ----
+export function PolarAreaChart({ labels, data, label = "Distribusi" }) {
+  const colors = ["#6366f1", "#06b6d4", "#22c55e", "#f59e42", "#ef4444", "#8b5cf6"];
+
+  const chartData = {
+    labels,
+    datasets: [
+      {
+        label,
+        data,
+        backgroundColor: labels.map((_, i) => colors[i % colors.length] + "55"),
+        borderColor: labels.map((_, i) => colors[i % colors.length]),
+        borderWidth: 2,
+      },
+    ],
+  };
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: true,
+    plugins: {
+      legend: {
+        position: "bottom",
+        labels: { font: { size: 11, weight: "500" }, padding: 12, usePointStyle: true, pointStyle: "circle" },
+      },
+      tooltip: {
+        backgroundColor: "rgba(30, 30, 40, 0.9)",
+        titleFont: { size: 12, weight: "bold" },
+        bodyFont: { size: 11 },
+        padding: 12,
+        cornerRadius: 8,
+        callbacks: {
+          label: (ctx) => `${ctx.label}: ${formatNumber(ctx.parsed.r)}`,
+        },
+      },
+    },
+    scales: {
+      r: {
+        grid: { color: "rgba(229, 231, 235, 0.3)" },
+        ticks: { display: false },
+        beginAtZero: true,
+      },
+    },
+  };
+
+  return <PolarArea data={chartData} options={options} />;
 }

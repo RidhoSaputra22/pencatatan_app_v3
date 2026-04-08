@@ -121,7 +121,7 @@ export default function Sidebar({ mobileOpen = false, setMobileOpen }) {
           } ${
             active
               ? "bg-primary font-semibold text-white shadow-sm"
-              : "text-slate-700 hover:bg-slate-100"
+              : "text-base-content/80 hover:bg-base-200"
           }`}
           onClick={() => setMobileOpen && setMobileOpen(false)}
         >
@@ -136,7 +136,7 @@ export default function Sidebar({ mobileOpen = false, setMobileOpen }) {
     return (
       <li key={title} className="mt-5">
         <div className="px-4 pb-2">
-          <div className="flex items-center gap-2 text-xs font-semibold text-slate-400">
+          <div className="flex items-center gap-2 text-xs font-semibold text-base-content/40">
             <span>{title}</span>
           </div>
         </div>
@@ -171,7 +171,7 @@ export default function Sidebar({ mobileOpen = false, setMobileOpen }) {
       onClick={() => setMobileOpen(false)}
     >
       <aside
-        className={`absolute left-0 top-0 h-full w-64 bg-white border-r border-gray-200 flex flex-col py-6 px-2 min-h-screen shadow-xl transition-transform duration-200 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}
+        className={`absolute left-0 top-0 h-full w-64 bg-base-100 border-r border-base-300/50 flex flex-col py-6 px-2 min-h-screen shadow-xl transition-transform duration-200 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-8 px-4 flex items-center justify-between">
@@ -204,10 +204,10 @@ export default function Sidebar({ mobileOpen = false, setMobileOpen }) {
           </button>
         </div>
         <div className="mb-5 px-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-base-content/40">
             Navigasi
           </p>
-          <p className="mt-2 text-sm text-slate-500">
+          <p className="mt-2 text-sm text-base-content/50">
             Dashboard, data master, dan laporan pengunjung.
           </p>
         </div>
@@ -217,7 +217,7 @@ export default function Sidebar({ mobileOpen = false, setMobileOpen }) {
   );
 
   const DesktopSidebar = (
-    <aside className="hidden lg:flex h-full w-64 bg-white border-r border-gray-200 flex-col py-6 px-3 sticky top-0 min-h-screen">
+    <aside className="hidden lg:flex h-full w-64 bg-base-100 border-r border-base-300/50 flex-col py-6 px-3 sticky top-0 min-h-screen">
       <div className="mb-5 px-4">
       </div>
       {navigation}

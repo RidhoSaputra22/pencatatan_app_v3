@@ -24,7 +24,18 @@ module.exports = {
           "primary-content": "#FFFFFF",
         },
       },
+      {
+        dark: {
+          ...themes.dark,
+          primary: "#7c3aed",
+          "primary-content": "#FFFFFF",
+          "base-100": "#1a1a2e",
+          "base-200": "#16213e",
+          "base-300": "#0f3460",
+          "base-content": "#e2e8f0",
+        },
+      },
     ],
-    darkTheme: false,
+    darkTheme: "dark",
   },
 };
