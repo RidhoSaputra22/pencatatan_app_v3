@@ -1,11 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { formatDateTime } from "@/lib/utils";
 import Section from "@/components/ui/Section";
 import Table from "@/components/ui/Table";
 import { useToast } from "@/context/ToastContext";
 
-export default function EmployeeTable({ employees = [], onDelete, onEditClick }) {
+export default function EmployeeTable({ employees = [], onDelete }) {
   const { showToast } = useToast();
 
   async function handleDeactivate(employee) {
@@ -46,13 +47,12 @@ export default function EmployeeTable({ employees = [], onDelete, onEditClick })
     </span>,
     formatDateTime(employee.updated_at),
     <div key="actions" className="flex gap-1">
-      <button
-        type="button"
-        onClick={() => onEditClick(employee)}
+      <Link
+        href={`/employees/${employee.employee_id}/edit`}
         className="btn btn-ghost btn-sm"
       >
         Edit
-      </button>
+      </Link>
       {employee.is_active && (
         <button
           type="button"

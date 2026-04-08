@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import Table from "@/components/ui/Table";
 import Section from "@/components/ui/Section";
 import { useToast } from "@/context/ToastContext";
@@ -7,7 +8,7 @@ import { useToast } from "@/context/ToastContext";
 /**
  * Table listing all users with edit/deactivate actions.
  */
-export default function UserTable({ users = [], onDelete, onEditClick }) {
+export default function UserTable({ users = [], onDelete }) {
   const { showToast } = useToast();
 
   async function handleDelete(user) {
@@ -39,9 +40,9 @@ export default function UserTable({ users = [], onDelete, onEditClick }) {
       {u.is_active ? "Aktif" : "Nonaktif"}
     </span>,
     <div key="actions" className="flex gap-1">
-      <button onClick={() => onEditClick(u)} className="btn btn-ghost btn-sm">
+      <Link href={`/users/${u.user_id}/edit`} className="btn btn-ghost btn-sm">
         Edit
-      </button>
+      </Link>
       {u.is_active && (
         <button
           onClick={() => handleDelete(u)}

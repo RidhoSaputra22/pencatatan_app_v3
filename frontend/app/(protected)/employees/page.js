@@ -1,8 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
-import EmployeeForm from "@/components/employees/EmployeeForm";
 import EmployeeTable from "@/components/employees/EmployeeTable";
 import Alert from "@/components/ui/Alert";
 import Heading from "@/components/ui/Heading";
@@ -16,11 +15,8 @@ export default function EmployeesPage() {
     employees,
     loading,
     error,
-    addEmployee,
-    editEmployee,
     removeEmployee,
   } = useEmployees();
-  const [editingEmployee, setEditingEmployee] = useState(null);
 
   if (user?.role !== "ADMIN") {
     return (
@@ -35,43 +31,29 @@ export default function EmployeesPage() {
     return <LoadingSpinner text="Memuat data pegawai..." />;
   }
 
-  if (editingEmployee) {
-    return (
-      <>
-        <Heading level={1}>Edit Pegawai</Heading>
-        <EmployeeForm
-          employee={editingEmployee}
-          onSaved={async (employeeId, formData) => {
-            await editEmployee(employeeId, formData);
-            setEditingEmployee(null);
-          }}
-          onCancel={() => setEditingEmployee(null)}
-        />
-      </>
-    );
-  }
-
   const activeEmployees = employees.filter((employee) => employee.is_active).length;
 
   return (
     <>
-      <Heading level={1}>Kelola Pegawai</Heading>
-      <Paragraph>
-        Data pegawai di halaman ini digunakan edge worker untuk memeriksa wajah dan
-        mengabaikan pegawai dari hitungan pelanggan. Pegawai aktif:{" "}
-        <strong>{activeEmployees}</strong> dari <strong>{employees.length}</strong>.
-        Kode pegawai dibatasi maksimal 10 karakter.
-      </Paragraph>
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <Heading level={1}>Kelola Pegawai</Heading>
+          <Paragraph>
+            Data pegawai digunakan edge worker untuk memeriksa wajah dan
+            mengabaikan pegawai dari hitungan pelanggan. Pegawai aktif:{" "}
+            <strong>{activeEmployees}</strong> dari <strong>{employees.length}</strong>.
+            Kode pegawai dibatasi maksimal 10 karakter.
+          </Paragraph>
+        </div>
+        <Link href="/employees/create" className="btn btn-primary w-fit">
+          Tambah Pegawai
+        </Link>
+      </div>
 
       {error && <Alert type="error">{error}</Alert>}
 
-      <EmployeeForm onCreated={addEmployee} />
       <div className="w-[95dvw] lg:w-full overflow-x-auto">
-        <EmployeeTable
-          employees={employees}
-          onDelete={removeEmployee}
-          onEditClick={setEditingEmployee}
-        />
+        <EmployeeTable employees={employees} onDelete={removeEmployee} />
       </div>
     </>
   );
