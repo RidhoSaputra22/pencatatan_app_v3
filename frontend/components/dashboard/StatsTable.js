@@ -95,50 +95,80 @@ export default function StatsTable({ daily = [] }) {
   ]);
 
   return (
-    <Section title="Statistik per Kamera">
-      <p className="text-sm opacity-70 mb-3">
-        Data diperbarui otomatis setiap 5 detik.
-      </p>
+    <div className="card bg-base-100 shadow-lg overflow-hidden">
+      <div className="p-5 pb-3">
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="font-bold text-base-content/80 flex items-center gap-2">
+            <span className="w-1 h-5 bg-secondary rounded-full"></span>
+            Statistik per Kamera
+          </h3>
+          <span className="text-[10px] px-2 py-0.5 bg-base-200 text-base-content/40 rounded-full font-medium">
+            {filteredDaily.length} baris
+          </span>
+        </div>
+        <p className="text-xs text-base-content/40 mb-4">
+          Data diperbarui otomatis setiap 5 detik
+        </p>
 
-      
-      <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <Input
-          label="Cari Data"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Tanggal atau ID kamera"
-        />
-        <Select
-          label="Kamera"
-          options={cameraOptions}
-          value={cameraFilter}
-          onChange={(e) => setCameraFilter(e.target.value)}
-        />
-        <Select
-          label="Aktivitas"
-          options={activityOptions}
-          value={activityFilter}
-          onChange={(e) => setActivityFilter(e.target.value)}
-        />
-        <div className="flex items-end">
-          <Button
-            variant="ghost"
-            isSubmit={false}
-            onClick={resetFilters}
-            className="w-fit"
-          >
-            Reset Filter
-          </Button>
+        {/* Summary mini stats */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+          <div className="bg-primary/5 rounded-lg px-3 py-2.5 text-center">
+            <p className="text-lg font-bold text-primary">{formatNumber(totalEvents)}</p>
+            <p className="text-[10px] text-base-content/40 font-medium">Total Aktivitas</p>
+          </div>
+          <div className="bg-success/5 rounded-lg px-3 py-2.5 text-center">
+            <p className="text-lg font-bold text-success">{formatNumber(totalIn)}</p>
+            <p className="text-[10px] text-base-content/40 font-medium">Total Masuk</p>
+          </div>
+          <div className="bg-error/5 rounded-lg px-3 py-2.5 text-center">
+            <p className="text-lg font-bold text-error">{formatNumber(totalOut)}</p>
+            <p className="text-[10px] text-base-content/40 font-medium">Total Keluar</p>
+          </div>
+          <div className="bg-info/5 rounded-lg px-3 py-2.5 text-center">
+            <p className="text-lg font-bold text-info">{formatNumber(totalVisitors)}</p>
+            <p className="text-[10px] text-base-content/40 font-medium">Pengunjung Unik</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <Input
+            label="Cari Data"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Tanggal atau ID kamera"
+          />
+          <Select
+            label="Kamera"
+            options={cameraOptions}
+            value={cameraFilter}
+            onChange={(e) => setCameraFilter(e.target.value)}
+          />
+          <Select
+            label="Aktivitas"
+            options={activityOptions}
+            value={activityFilter}
+            onChange={(e) => setActivityFilter(e.target.value)}
+          />
+          <div className="flex items-end">
+            <Button
+              variant="ghost"
+              isSubmit={false}
+              onClick={resetFilters}
+              className="w-fit"
+            >
+              Reset Filter
+            </Button>
+          </div>
         </div>
       </div>
 
-      <div className="mt-4 w-80 lg:w-full overflow-x-auto">
+      <div className="px-5 pb-5 w-80 lg:w-full overflow-x-auto">
         <Table
           columns={columns}
           rows={rows}
           emptyText="Belum ada data. Jalankan edge worker (mode FAKE atau REAL)."
         />
       </div>
-    </Section>
+    </div>
   );
 }

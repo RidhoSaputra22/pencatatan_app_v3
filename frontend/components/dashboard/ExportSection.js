@@ -106,21 +106,33 @@ export default function ExportSection({ filterFrom, filterTo, day }) {
   }
 
   return (
-    <Section title="Export & Cetak Laporan">
-      <p className="text-sm opacity-70 mb-3">
-        Periode: <strong>{fromDay}</strong> s/d <strong>{toDay}</strong>
-      </p>
+    <div className="card bg-gradient-to-r from-base-100 to-primary/5 shadow-lg p-5">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h3 className="font-bold text-base-content/80 flex items-center gap-2 mb-1">
+            <svg className="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Export & Cetak Laporan
+          </h3>
+          <p className="text-xs text-base-content/40">
+            Periode: <strong className="text-base-content/60">{fromDay}</strong> s/d <strong className="text-base-content/60">{toDay}</strong>
+          </p>
+        </div>
 
-      <div className="flex flex-wrap gap-3">
-        <Button variant="secondary" loading={downloading} onClick={handleDownloadCSV}>
-          Download CSV
-        </Button>
-        <Button variant="primary" onClick={handlePrint}>
-          Cetak Laporan
-        </Button>
+        <div className="flex flex-wrap gap-3">
+          <Button variant="secondary" loading={downloading} onClick={handleDownloadCSV}>
+            <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+            Download CSV
+          </Button>
+          <Button variant="primary" onClick={handlePrint}>
+            <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
+            Cetak Laporan
+          </Button>
+        </div>
       </div>
 
-      {error && <Alert variant="error">{error}</Alert>}
-    </Section>
+      {error && <div className="mt-3"><Alert variant="error">{error}</Alert></div>}
+    </div>
   );
 }
