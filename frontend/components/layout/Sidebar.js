@@ -116,11 +116,11 @@ export default function Sidebar({ mobileOpen = false, setMobileOpen }) {
       <li key={href}>
         <Link
           href={href}
-          className={`flex items-center gap-3 px-4 py-2.5 transition text-sm${
-            nested ? "ml-3 rounded-sm  " : "rounded-sm"
+          className={`rounded-md flex items-center gap-3 px-4 py-2.5 transition text-sm${
+            nested ? "ml-3 rounded-md  " : "rounded-md"
           } ${
             active
-              ? "bg-gradient-to-r from-sky-50 to-teal-50 font-semibold text-sky-700 shadow-sm"
+              ? "bg-primary font-semibold text-white shadow-sm"
               : "text-slate-700 hover:bg-slate-100"
           }`}
           onClick={() => setMobileOpen && setMobileOpen(false)}
@@ -153,14 +153,14 @@ export default function Sidebar({ mobileOpen = false, setMobileOpen }) {
           "Data Master",
           [
             navLink("/camera", "Kamera", <CameraIcon />),
-            navLink("/employees", "Pegawai", <EmployeesIcon />, { nested: true }),
-            navLink("/users", "Pengguna", <UsersIcon />, { nested: true }),
+            navLink("/employees", "Pegawai", <EmployeesIcon />),
+            navLink("/users", "Pengguna", <UsersIcon />),
           ],
         )}
       {isAdmin &&
         navSection(
           "Laporan Pengunjung",
-          [navLink("/visits", "Pengunjung", <VisitsIcon />, { nested: true })],
+          [navLink("/visits", "Pengunjung", <VisitsIcon />)],
         )}
     </ul>
   );

@@ -23,7 +23,7 @@ export default function Table({
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={columns.length} className="text-center opacity-60">
+              <td colSpan={columns.length + 1} className="text-center opacity-60">
                 {emptyText}
               </td>
             </tr>
