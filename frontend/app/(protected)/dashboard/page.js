@@ -307,7 +307,7 @@ export default function DashboardPage() {
         uniqueVisitors={uniqueVisitors}
       />
 
-      {/* ===== CHARTS ROW 1: Line + Bar (2 column) ===== */}
+      {/* ===== CHARTS ROW 2: Doughnut + Camera (2 column) ===== */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card className="!shadow-lg">
           <div className="flex items-center justify-between mb-4">
@@ -331,6 +331,20 @@ export default function DashboardPage() {
           />
         </Card>
 
+        <div className="">
+          <CameraView />
+        </div>
+      </div>
+
+      {/* ===== CHARTS ROW 1: Line + Bar (2 column) ===== */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card className="!shadow-lg">
+          <h3 className="font-bold text-base-content/80 mb-4 flex items-center gap-2">
+            <span className="w-1 h-5 bg-info rounded-full"></span>
+            Distribusi Masuk / Keluar
+          </h3>
+          <InOutDoughnutChart totalIn={totalIn} totalOut={totalOut} />
+        </Card>
         <Card className="!shadow-lg">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-base-content/80 flex items-center gap-2">
@@ -344,21 +358,6 @@ export default function DashboardPage() {
             dataOut={barOut}
           />
         </Card>
-      </div>
-
-      {/* ===== CHARTS ROW 2: Doughnut + Camera (2 column) ===== */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <Card className="!shadow-lg">
-          <h3 className="font-bold text-base-content/80 mb-4 flex items-center gap-2">
-            <span className="w-1 h-5 bg-info rounded-full"></span>
-            Distribusi Masuk / Keluar
-          </h3>
-          <InOutDoughnutChart totalIn={totalIn} totalOut={totalOut} />
-        </Card>
-
-        <div className="lg:col-span-2">
-          <CameraView />
-        </div>
       </div>
 
       {/* ===== CHARTS ROW 3: Area + Radar (2 column) ===== */}

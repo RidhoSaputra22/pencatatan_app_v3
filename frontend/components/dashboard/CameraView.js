@@ -117,7 +117,7 @@ export default function CameraView() {
   };
 
   return (
-    <div className="card bg-base-100 shadow-lg overflow-hidden">
+    <div className="card bg-base-100 shadow-lg overflow-hidden h-full">
       <div className="p-5 pb-3">
         <h3 className="font-bold text-base-content/80 flex items-center gap-2">
           <span className="w-1 h-5 bg-warning rounded-full"></span>
@@ -141,7 +141,7 @@ export default function CameraView() {
       {error && (
         <div className="p-5 pt-0 space-y-3">
           <div className="bg-base-200/50 rounded-xl p-6 text-center">
-            <svg className="w-12 h-12 mx-auto text-base-content/20 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-12 h-full mx-auto text-base-content/20 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
             <p className="font-medium text-sm text-base-content/60">Tidak bisa terkoneksi ke CCTV</p>
@@ -157,7 +157,7 @@ export default function CameraView() {
       )}
 
       <div className="relative">
-        <div className="max-h-[320px] overflow-hidden bg-black">
+        <div className="h-full overflow-hidden bg-black">
           <img
             ref={imgRef}
             src={streamSrc}
