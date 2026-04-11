@@ -5,6 +5,9 @@ import numpy as np
 import requests
 
 from .config import BACKEND_URL, AUTH_USER, AUTH_PASS, CAMERA_ID, INGEST_URL
+from .logger import get_logger
+
+log = get_logger("api")
 
 
 def generate_visitor_key(camera_id: int, track_id: int, date_str: str) -> str:
@@ -68,7 +71,7 @@ def login_token() -> Optional[str]:
         if r.status_code == 200:
             return r.json()["access_token"]
     except Exception as e:
-        print(f"[edge] Login failed: {e}")
+        log.error("Login failed: %s", e)
     return None
 
 
@@ -80,7 +83,7 @@ def get_camera_config(token: Optional[str]) -> Dict[str, Any]:
         if r.status_code == 200:
             return r.json()
     except Exception as e:
-        print(f"[edge] Failed to get camera config: {e}")
+        log.error("Failed to get camera config: %s", e)
     return {}
 
 
@@ -92,7 +95,7 @@ def get_counting_areas(token: Optional[str]) -> List[Dict[str, Any]]:
         if r.status_code == 200:
             return r.json()
     except Exception as e:
-        print(f"[edge] Failed to get counting areas: {e}")
+        log.error("Failed to get counting areas: %s", e)
     return []
 
 
@@ -104,7 +107,7 @@ def get_employee_registry(token: Optional[str]) -> Dict[str, Any]:
         if r.status_code == 200:
             return r.json()
     except Exception as e:
-        print(f"[edge] Failed to get employee registry: {e}")
+        log.error("Failed to get employee registry: %s", e)
     return {"items": []}
 
 

@@ -18,17 +18,18 @@ import threading
 import time
 
 from core.config import MODE, EDGE_STREAM_PORT
+from core.logger import get_logger
 from core.streaming import start_flask_server
 from core.loops import real_loop
+
+log = get_logger("main")
 
 
 def main():
     """Main entry point"""
-    # Start Flask streaming server in background thread
-    # Server ini menyajikan frame YOLO+tracking ke frontend dashboard
     flask_thread = threading.Thread(target=start_flask_server, daemon=True)
     flask_thread.start()
-    print(f"[main] Flask streaming server started on port {EDGE_STREAM_PORT}")
+    log.info("Flask streaming server started on port %d", EDGE_STREAM_PORT)
 
     # Wait a bit for Flask to start
     time.sleep(1)

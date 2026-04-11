@@ -6,6 +6,10 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 
+from .logger import get_logger
+
+log = get_logger("capture")
+
 
 def is_video_file(source: str) -> bool:
     """Check if the source is a local video file (not a stream or webcam index)."""
@@ -23,19 +27,24 @@ def open_video_capture(source: str):
     """
     if source.isdigit():
         idx = int(source)
-        print(f"[capture] Opening webcam index {idx} directly")
+        log.info("Opening webcam index %d directly", idx)
         for backend in [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]:
             capture = cv2.VideoCapture(idx, backend)
             if capture.isOpened():
-                print(f"[capture] Webcam opened with backend: {backend}")
+                log.info("Webcam opened with backend: %s", backend)
                 capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 return capture
         capture = cv2.VideoCapture(idx)
     elif is_video_file(source):
-        print(f"[capture] Opening video file: {source}")
+        log.info("Opening video file: %s", source)
         capture = cv2.VideoCapture(source)
     else:
+        # Network stream (HTTP/RTSP): set timeouts so capture.read() never blocks
+        # indefinitely. Without these, calling capture.release() while the reader
+        # thread is blocked in capture.read() causes a SIGSEGV in FFmpeg internals.
         capture = cv2.VideoCapture(source)
+        capture.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10_000)  # 10 s connect timeout
+        capture.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 3_000)   # 3 s per-frame timeout
 
     capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     return capture
@@ -138,14 +147,22 @@ class LatestFrameCapture:
             self._file_ended = False
             self._condition.notify_all()
 
+        # Join the reader thread BEFORE releasing the capture.
+        # If the thread is blocked inside capture.read() (e.g. waiting on an HTTP
+        # relay), calling capture.release() concurrently tears down FFmpeg's internal
+        # state and causes a SIGSEGV. With CAP_PROP_READ_TIMEOUT_MSEC set on network
+        # sources the blocked read() returns within that window, the thread sees
+        # _running=False and exits cleanly — then we can safely release the capture.
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=5.0)
+            if thread.is_alive():
+                log.warning("Warning: reader thread did not exit in time")
+
         if capture is not None:
             try:
                 capture.release()
             except Exception:
                 pass
-
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=1.0)
 
     def _reader_loop(self) -> None:
         capture = self._capture
@@ -163,7 +180,7 @@ class LatestFrameCapture:
                         # Video file ended — signal file_ended and stop
                         self._file_ended = True
                         self._condition.notify_all()
-                        print("[capture] Video file ended.")
+                        log.info("Video file ended.")
                         return
                     self._read_failed = True
                     self._condition.notify_all()

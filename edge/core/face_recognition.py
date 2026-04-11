@@ -15,6 +15,9 @@ from .config import (
     FACE_RECHECK_SECONDS,
     FACE_UNKNOWN_TIMEOUT,
 )
+from .logger import get_logger
+
+log = get_logger("face")
 
 try:
     from insightface.app import FaceAnalysis
@@ -70,7 +73,7 @@ class EmployeeFaceRecognizer:
 
         if not INSIGHTFACE_AVAILABLE:
             self.reason = _IMPORT_ERROR or "InsightFace unavailable"
-            print(f"[face] Recognition disabled: {self.reason}")
+            log.warning("Recognition disabled: %s", self.reason)
             return
 
         try:
@@ -83,10 +86,10 @@ class EmployeeFaceRecognizer:
                 det_size=(INSIGHTFACE_DET_SIZE, INSIGHTFACE_DET_SIZE),
             )
             self.available = True
-            print("[face] InsightFace initialized for employee recognition")
+            log.info("InsightFace initialized for employee recognition")
         except Exception as exc:  # pragma: no cover - depends on runtime
             self.reason = str(exc)
-            print(f"[face] Failed to initialize InsightFace: {self.reason}")
+            log.error("Failed to initialize InsightFace: %s", self.reason)
 
     def refresh_registry(self, fetch_fn, token: Optional[str], force: bool = False) -> None:
         """Refresh employee embeddings from backend."""
@@ -120,7 +123,7 @@ class EmployeeFaceRecognizer:
         else:
             self._employee_matrix = None
         self._last_registry_refresh = now
-        print(f"[face] Loaded {len(registry)} employee face embeddings")
+        log.info("Loaded %d employee face embeddings", len(registry))
 
     def reset_daily(self) -> None:
         """Reset active track classifications on date rollover."""

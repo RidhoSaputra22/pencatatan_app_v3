@@ -24,6 +24,9 @@ from .config import (
     EDGE_STREAM_PORT,
     EDGE_STREAM_URL,
 )
+from .logger import get_logger
+
+log = get_logger("stream")
 
 # Global variable for sharing latest frame with stream server
 latest_frame = None        # processed frame (with ROI, bboxes, info overlay)
@@ -55,7 +58,7 @@ CORS(flask_app, resources={
 def gen_frames(raw=False):
     """Generate MJPEG stream frames from pre-encoded JPEG bytes"""
     label = "raw" if raw else "processed"
-    print(f"[stream] Client connected to video feed ({label})")
+    log.debug("Client connected to video feed (%s)", label)
     target_interval = 1.0 / EDGE_STREAM_MAX_FPS if EDGE_STREAM_MAX_FPS > 0 else 0.0
     next_send_at = 0.0
     last_version = -1
@@ -100,7 +103,7 @@ def gen_frames(raw=False):
                 _raw_clients = max(0, _raw_clients - 1)
             else:
                 _processed_clients = max(0, _processed_clients - 1)
-        print(f"[stream] Client disconnected from video feed ({label})")
+        log.debug("Client disconnected from video feed (%s)", label)
 
 
 @flask_app.route('/video_feed')
@@ -166,9 +169,9 @@ def handle_options():
 
 def start_flask_server():
     """Start Flask server in background thread"""
-    print(
-        f"[stream] Starting processed video server on "
-        f"http://{EDGE_STREAM_HOST}:{EDGE_STREAM_PORT}/video_feed"
+    log.info(
+        "Starting processed video server on http://%s:%d/video_feed",
+        EDGE_STREAM_HOST, EDGE_STREAM_PORT,
     )
     flask_app.run(
         host=EDGE_STREAM_HOST,

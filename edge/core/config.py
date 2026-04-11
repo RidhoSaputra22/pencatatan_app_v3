@@ -82,6 +82,9 @@ def env_bool_required(name: str) -> bool:
     return env_required(name).lower() in {"1", "true", "yes", "on"}
 
 
+# App environment — controls log verbosity (dev=DEBUG, else INFO)
+APP_ENV = env("APP_ENV", "production").strip().lower()
+
 # Mode configuration
 MODE = env_required("EDGE_MODE").lower()
 CAMERA_ID = env_int_required("EDGE_CAMERA_ID")
@@ -98,7 +101,9 @@ EDGE_STREAM_JPEG_QUALITY = max(50, min(95, env_int_required("EDGE_STREAM_JPEG_QU
 EDGE_STREAM_MAX_FPS = max(0, env_int_required("EDGE_STREAM_MAX_FPS"))
 EDGE_STREAM_ALLOW_ORIGIN = env_required("EDGE_STREAM_ALLOW_ORIGIN")
 
-# YOLOv5 configuration
+# YOLO configuration
+# YOLO_BACKEND: "yolov5" (torch.hub) | "ultralytics" (YOLOv8/v9/v10/v11 via ultralytics package)
+YOLO_BACKEND = env("YOLO_BACKEND", "yolov5").strip().lower()
 CONF_TH = env_float_required("YOLOV5_CONF")
 IOU_TH = env_float_required("YOLOV5_IOU")
 IMG_SIZE = env_int_required("YOLOV5_IMG_SIZE")

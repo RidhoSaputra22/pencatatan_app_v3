@@ -1,11 +1,14 @@
-"""YOLOv5 detection and ROI utilities"""
+"""YOLO detection and ROI utilities — supports YOLOv5 (torch.hub) and Ultralytics (YOLOv8+)"""
 import json
 import warnings
 from typing import Optional, List, Union
 import numpy as np
 import cv2
 
-from .config import CONF_TH, IOU_TH, DEVICE, WEIGHTS, REPO
+from .config import CONF_TH, IOU_TH, DEVICE, WEIGHTS, REPO, YOLO_BACKEND
+from .logger import get_logger
+
+log = get_logger("detection")
 
 # Check Intel XPU availability
 INTEL_XPU_AVAILABLE = False
@@ -14,7 +17,7 @@ try:
     import torch
     if hasattr(torch, 'xpu') and torch.xpu.is_available():
         INTEL_XPU_AVAILABLE = True
-        print(f"[detection] Intel XPU available: {torch.xpu.get_device_name(0)}")
+        log.info("Intel XPU available: %s", torch.xpu.get_device_name(0))
 except ImportError:
     pass
 
@@ -32,7 +35,7 @@ def get_optimal_device():
         elif DEVICE == "cpu":
             return "cpu"
         else:
-            print(f"[detection] Warning: Requested device '{DEVICE}' not available, falling back...")
+            log.warning("Requested device '%s' not available, falling back...", DEVICE)
     
     # Auto-detect best device
     if INTEL_XPU_AVAILABLE:
@@ -52,14 +55,14 @@ def load_yolov5_model():
     
     # Determine device
     device = get_optimal_device()
-    print(f"[detection] Loading YOLOv5 model on device: {device}")
+    log.info("Loading YOLOv5 model '%s' on device: %s", WEIGHTS, device)
     
     if REPO and WEIGHTS:
-        model = torch.hub.load(REPO, "custom", path=WEIGHTS, source="local")
+        model = torch.hub.load(REPO, "custom", path=WEIGHTS, source="local", force_reload=True)
     elif WEIGHTS and not REPO:
-        model = torch.hub.load("ultralytics/yolov5", "custom", path=WEIGHTS)
+        model = torch.hub.load("ultralytics/yolov5", "custom", path=WEIGHTS, force_reload=True)
     else:
-        model = torch.hub.load("ultralytics/yolov5", "yolov5s", pretrained=True)
+        model = torch.hub.load("ultralytics/yolov5", "yolov5s", pretrained=True, force_reload=True)
 
     model.conf = CONF_TH
     model.iou = IOU_TH
@@ -73,12 +76,98 @@ def load_yolov5_model():
         try:
             import intel_extension_for_pytorch as ipex
             model = ipex.optimize(model)
-            print("[detection] Model optimized with Intel Extension for PyTorch")
+            log.info("Model optimized with Intel Extension for PyTorch")
         except Exception as e:
-            print(f"[detection] Warning: IPEX optimization failed: {e}")
+            log.warning("IPEX optimization failed: %s", e)
     
-    print(f"[detection] YOLOv5 model loaded successfully on {device}")
+    log.info("YOLOv5 model loaded successfully on %s", device)
     return model
+
+
+# ---------------------------------------------------------------------------
+# Ultralytics wrapper — makes YOLOv8/v9/v10/v11 look like YOLOv5 to loops.py
+# ---------------------------------------------------------------------------
+
+class _UltralyticsResults:
+    """Mimics the `results.xyxy[0]` interface that loops.py expects."""
+
+    def __init__(self, result):
+        import torch
+        boxes = result.boxes
+        if boxes is not None and len(boxes) > 0:
+            xyxy = boxes.xyxy.cpu()             # (N, 4)
+            conf = boxes.conf.cpu().unsqueeze(1) # (N, 1)
+            cls  = boxes.cls.cpu().unsqueeze(1)  # (N, 1)
+            combined = torch.cat([xyxy, conf, cls], dim=1)  # (N, 6)
+        else:
+            combined = torch.zeros((0, 6))
+        self.xyxy = [combined]
+
+
+class _UltralyticsModelWrapper:
+    """Wraps an Ultralytics YOLO model to match the YOLOv5 call signature."""
+
+    def __init__(self, model, conf: float, iou: float):
+        self._model = model
+        self._conf = conf
+        self._iou = iou
+
+    def __call__(self, frame, size: int = 640):
+        results = self._model(
+            frame,
+            imgsz=size,
+            conf=self._conf,
+            iou=self._iou,
+            classes=[0],   # person only
+            verbose=False,
+        )
+        return _UltralyticsResults(results[0])
+
+    # Passthrough so callers can do model.to(device) without an error
+    def to(self, device):
+        return self
+
+
+def load_ultralytics_model():
+    """Load a YOLOv8/v9/v10/v11 model via the ultralytics package."""
+    try:
+        from ultralytics import YOLO
+    except ImportError as exc:
+        raise ImportError(
+            "Package 'ultralytics' is required for YOLO_BACKEND=ultralytics. "
+            "Install it with:  pip install ultralytics"
+        ) from exc
+
+    device = get_optimal_device()
+    log.info("Loading Ultralytics model '%s' on device: %s", WEIGHTS, device)
+
+    model = YOLO(WEIGHTS)
+    model.to(device)
+
+    log.info("Ultralytics model loaded successfully on %s", device)
+    return _UltralyticsModelWrapper(model, conf=CONF_TH, iou=IOU_TH)
+
+
+# ---------------------------------------------------------------------------
+# Unified entry point
+# ---------------------------------------------------------------------------
+
+def load_model():
+    """Load the YOLO model selected by YOLO_BACKEND env variable.
+
+    YOLO_BACKEND=yolov5       → YOLOv5 via torch.hub  (default)
+    YOLO_BACKEND=ultralytics  → YOLOv8/v9/v10/v11 via ultralytics package
+    """
+    backend = YOLO_BACKEND
+    log.info("YOLO_BACKEND=%r", backend)
+    if backend == "ultralytics":
+        return load_ultralytics_model()
+    if backend == "yolov5":
+        return load_yolov5_model()
+    raise ValueError(
+        f"Unknown YOLO_BACKEND={backend!r}. "
+        "Supported values: 'yolov5', 'ultralytics'"
+    )
 
 
 def parse_roi(roi_data: Optional[Union[str, List]]) -> Optional[List[List[float]]]:
@@ -100,7 +189,7 @@ def parse_roi(roi_data: Optional[Union[str, List]]) -> Optional[List[List[float]
             if isinstance(parsed, list):
                 return parsed
         except json.JSONDecodeError as e:
-            print(f"[edge] Failed to parse ROI JSON: {e}")
+            log.warning("Failed to parse ROI JSON: %s", e)
             return None
     
     return None

@@ -9,12 +9,19 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional, Any
 import numpy as np
 
+from .logger import get_logger
+
+log = get_logger("tracker")
+
 try:
     from deep_sort_realtime.deepsort_tracker import DeepSort
     DEEPSORT_AVAILABLE = True
 except ImportError:
     DEEPSORT_AVAILABLE = False
-    print("[tracker] Warning: deep-sort-realtime not installed. Using fallback CentroidTracker.")
+    import logging as _logging
+    _logging.getLogger("edge.tracker").warning(
+        "deep-sort-realtime not installed. Using fallback CentroidTracker."
+    )
 
 
 def _disable_mkldnn_backend() -> bool:
@@ -30,7 +37,7 @@ def _disable_mkldnn_backend() -> bool:
         return False
 
     torch.backends.mkldnn.enabled = False
-    print("[tracker] MKLDNN disabled for DeepSORT embedder compatibility")
+    log.warning("MKLDNN disabled for DeepSORT embedder compatibility")
     return True
 
 
@@ -72,7 +79,7 @@ class DeepSORTTracker:
         self.using_fallback = True
 
         if not DEEPSORT_AVAILABLE:
-            print("[tracker] Using fallback CentroidTracker")
+            log.warning("Using fallback CentroidTracker")
             return
 
         try:
@@ -92,7 +99,7 @@ class DeepSORTTracker:
         if self.tracker is not None:
             self.tracks = {}
             self.using_fallback = False
-            print(f"[tracker] DeepSORT initialized (max_age={max_age}, n_init={n_init})")
+            log.info("DeepSORT initialized (max_age=%d, n_init=%d)", max_age, n_init)
 
     def _create_deepsort_tracker(self):
         return DeepSort(
@@ -108,8 +115,8 @@ class DeepSORTTracker:
         self.tracker = None
         self.using_fallback = True
         self.tracks = self._fallback_tracker.tracks
-        print(f"[tracker] Warning: {reason}")
-        print("[tracker] Falling back to CentroidTracker")
+        log.warning("%s", reason)
+        log.warning("Falling back to CentroidTracker")
     
     def update(self, frame: np.ndarray, detections: List[Tuple[float, float, float, float, float]]) -> Dict[int, Track]:
         """

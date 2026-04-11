@@ -6,6 +6,10 @@ import hashlib
 from typing import Optional, List, Dict, Any, Tuple
 import numpy as np
 
+from .logger import get_logger
+
+log = get_logger("reid")
+
 # Embedding cache untuk menyimpan rata-rata embedding per visitor
 # Key: track_id, Value: {'embedding': np.array, 'count': int, 'visitor_key': str}
 _embedding_cache: Dict[int, Dict[str, Any]] = {}
@@ -28,7 +32,7 @@ def reset_daily_cache(date_str: str):
         _daily_matrix = None
         _daily_matrix_dirty = False
         _current_date = date_str
-        print(f"[reid] Reset daily embedding cache for {date_str}")
+        log.info("Reset daily embedding cache for %s", date_str)
 
 
 def embedding_to_hash(embedding: np.ndarray) -> str:
@@ -136,14 +140,14 @@ def update_track_embedding(track_id: int, embedding: np.ndarray, camera_id: int,
     if existing_key:
         # Same person re-entered - use existing visitor_key
         visitor_key = existing_key
-        print(f"[reid] Track {track_id} matched to existing visitor {visitor_key[:8]}...")
+        log.debug("Track %d matched to existing visitor %s...", track_id, visitor_key[:8])
     else:
         # New visitor today
         visitor_key = embedding_to_hash(embedding)
         # Store in daily cache and mark matrix for rebuild
         _daily_embeddings[visitor_key] = embedding.copy()
         _daily_matrix_dirty = True
-        print(f"[reid] New visitor detected: {visitor_key[:8]}...")
+        log.debug("New visitor detected: %s...", visitor_key[:8])
     
     # Cache this track
     _embedding_cache[track_id] = {

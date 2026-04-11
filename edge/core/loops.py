@@ -23,12 +23,15 @@ from .config import (
     TRACK_MAX_DISAPPEARED,
     TRACK_MAX_DISTANCE,
 )
-from .detection import load_yolov5_model, parse_roi, point_in_roi
+from .detection import load_model, parse_roi, point_in_roi
 from .face_recognition import EmployeeFaceRecognizer
+from .logger import get_logger
 from .reid import cleanup_old_tracks, reset_daily_cache, update_track_embedding
 from .streaming import has_raw_stream_clients, update_latest_frame
 from .tracker import CentroidTracker, DEEPSORT_AVAILABLE, DeepSORTTracker
 from .visualization import draw_bounding_boxes, draw_info_overlay, draw_roi_polygon
+
+log = get_logger("loops")
 
 # Standard frame resolution — must match the frontend ROI editor (NATIVE_W × NATIVE_H)
 FRAME_W = 1280
@@ -75,11 +78,12 @@ def _send_track_event(
 def real_loop():
     """YOLOv5 + DeepSORT + face recognition + employee-aware counting."""
     tracker_mode = "DeepSORT+ReID" if DEEPSORT_AVAILABLE else "CentroidTracker"
-    print(f"[edge] running in REAL mode (YOLOv5 + {tracker_mode} + employee filtering)")
 
     token = login_token()
-    model = load_yolov5_model()
+    model = load_model()
     face_recognizer = EmployeeFaceRecognizer()
+
+    log.info("Running in REAL mode (%s + employee filtering)", tracker_mode)
 
     if DEEPSORT_AVAILABLE:
         tracker = DeepSORTTracker(
@@ -120,7 +124,7 @@ def real_loop():
             face_recognizer.reset_daily()
             for _, track in tracker.tracks.items():
                 track.in_roi = False
-            print(f"[edge] New day: {today}, reset visitor tracking + face cache")
+            log.info("New day: %s — reset visitor tracking + face cache", today)
 
         if now_ts - last_cfg_fetch > CONFIG_REFRESH or last_cfg_fetch == 0:
             if token is None:
@@ -148,17 +152,17 @@ def real_loop():
 
             last_cfg_fetch = now_ts
             if roi:
-                print(f"[edge] ROI loaded: {roi}")
+                log.debug("ROI loaded: %s", roi)
             if stream_url:
-                print(f"[edge] Stream URL: {stream_url}")
+                log.debug("Stream URL: %s", stream_url)
 
         if not stream_url:
-            print("[edge] Stream URL not set. Configure via UI or env EDGE_STREAM_URL")
+            log.warning("Stream URL not set. Configure via UI or env EDGE_STREAM_URL")
             time.sleep(5)
             continue
 
         if cap_source != stream_url and cap is not None:
-            print(f"[edge] Stream source changed -> reconnecting to {stream_url}")
+            log.info("Stream source changed → reconnecting to %s", stream_url)
             cap.release()
             cap = None
             cap_source = ""
@@ -167,7 +171,7 @@ def real_loop():
         if cap is None or not cap.isOpened():
             cap = LatestFrameCapture(stream_url)
             if not cap.start():
-                print("[edge] Failed to open stream. Retrying...")
+                log.warning("Failed to open stream. Retrying...")
                 cap = None
                 cap_source = ""
                 time.sleep(3)
@@ -179,14 +183,14 @@ def real_loop():
         if not ok or frame is None:
             if cap is not None and hasattr(cap, 'file_ended') and cap.file_ended:
                 # Video file ended — loop from beginning
-                print("[edge] Video file ended. Restarting from beginning...")
+                log.info("Video file ended. Restarting from beginning...")
                 cap.release()
                 cap = None
                 cap_source = ""
                 last_frame_id = 0
                 time.sleep(1)
                 continue
-            print("[edge] Frame read failed. Reconnecting...")
+            log.warning("Frame read failed. Reconnecting...")
             if cap is not None:
                 cap.release()
             cap = None
@@ -295,15 +299,15 @@ def real_loop():
                                 state["is_new"] = False
                                 state["direction"] = "IGNORE"
                                 label = classification.get("employee_name") or visitor_key
-                                print(f"[edge] Employee ignored IN: {label} -> {result['status_code']}")
+                                log.debug("Employee ignored IN: %s -> %s", label, result['status_code'])
                             else:
                                 is_new = result["data"].get("is_new_unique", False)
                                 status = "NEW" if is_new else "EXISTING"
                                 state["is_new"] = is_new
                                 state["direction"] = "IN"
-                                print(f"[edge] Visitor IN: {visitor_key[:8]}... [{status}] -> {result['status_code']}")
+                                log.debug("Visitor IN: %s... [%s] -> %s", visitor_key[:8], status, result['status_code'])
                         else:
-                            print(f"[edge] Failed to send IN event: {result.get('error', 'Unknown')}")
+                            log.error("Failed to send IN event: %s", result.get('error', 'Unknown'))
                     else:
                         state["pending_entry"] = False
                         state["entry_logged"] = False
@@ -338,11 +342,11 @@ def real_loop():
                             )
                             if classification["person_type"] == "EMPLOYEE":
                                 label = classification.get("employee_name") or visitor_key
-                                print(f"[edge] Employee ignored OUT: {label} -> {result['status_code']}")
+                                log.debug("Employee ignored OUT: %s -> %s", label, result['status_code'])
                             else:
-                                print(f"[edge] Visitor OUT: {visitor_key[:8]}... -> {result['status_code']}")
+                                log.debug("Visitor OUT: %s... -> %s", visitor_key[:8], result['status_code'])
                         else:
-                            print(f"[edge] Failed to send OUT event: {result.get('error', 'Unknown')}")
+                            log.error("Failed to send OUT event: %s", result.get('error', 'Unknown'))
                     else:
                         state["entry_logged"] = False
                         state["direction"] = (
