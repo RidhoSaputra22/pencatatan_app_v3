@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 from sqlmodel import Session, select
 
 from .settings import settings
@@ -1178,16 +1178,10 @@ def reset_database(
     Hanya bisa diakses oleh ADMIN
     """
     try:
-        # Delete all visitor data
-        session.exec(select(VisitEvent)).all()
-        for event in session.exec(select(VisitEvent)).all():
-            session.delete(event)
-        
-        for visitor in session.exec(select(VisitorDaily)).all():
-            session.delete(visitor)
-        
-        for stat in session.exec(select(DailyStats)).all():
-            session.delete(stat)
+        # Bulk DELETE — jauh lebih cepat daripada load semua row ke memory
+        session.exec(text("DELETE FROM visit_events"))
+        session.exec(text("DELETE FROM visitor_daily"))
+        session.exec(text("DELETE FROM daily_stats"))
         
         session.commit()
         
@@ -1208,28 +1202,29 @@ def stats_per_second(
     _: User = Depends(require_role("ADMIN", "OPERATOR"))
 ):
     """Statistik event per detik untuk 1 hari (untuk chart granular)."""
-    from datetime import datetime, timedelta
-    start_dt = datetime.combine(day, datetime.min.time())
-    end_dt = datetime.combine(day, datetime.max.time())
-    q = select(VisitEvent).where(
-        VisitEvent.event_time >= start_dt,
-        VisitEvent.event_time <= end_dt,
-        or_(VisitEvent.person_type == None, VisitEvent.person_type != "EMPLOYEE"),
-    )
+    from datetime import datetime as dt_cls
+
+    day_str = day.isoformat()
+
+    # Aggregate langsung di SQL — hindari load semua event ke memory
+    params = {"day_start": f"{day_str} 00:00:00", "day_end": f"{day_str} 23:59:59"}
+    camera_filter = ""
     if camera_id:
-        q = q.where(VisitEvent.camera_id == camera_id)
-    events = session.exec(q).all()
-    # Group by second
-    buckets = defaultdict(int)
-    for e in events:
-        sec = e.event_time.replace(microsecond=0)
-        buckets[sec] += 1
-    # Format output: list of {second: ISO, count: int}
-    result = [
-        {"second": dt.isoformat(), "count": buckets[dt]}
-        for dt in sorted(buckets.keys())
-    ]
-    return result
+        camera_filter = " AND camera_id = :camera_id"
+        params["camera_id"] = camera_id
+
+    sql = text(
+        f"SELECT strftime('%Y-%m-%dT%H:%M:%S', event_time) AS second_key, "
+        f"COUNT(*) AS cnt "
+        f"FROM visit_events "
+        f"WHERE event_time >= :day_start AND event_time <= :day_end "
+        f"AND (person_type IS NULL OR person_type != 'EMPLOYEE') "
+        f"{camera_filter} "
+        f"GROUP BY second_key "
+        f"ORDER BY second_key"
+    )
+    rows = session.exec(sql, params=params).all()
+    return [{"second": row[0], "count": row[1]} for row in rows]
 
 
 # ==================== Footage Upload (Client CCTV) ====================

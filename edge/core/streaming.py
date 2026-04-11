@@ -28,6 +28,8 @@ from .config import (
 # Global variable for sharing latest frame with stream server
 latest_frame = None        # processed frame (with ROI, bboxes, info overlay)
 latest_frame_raw = None     # raw frame (no overlay) for ROI editor
+_latest_jpeg = None         # pre-encoded JPEG bytes (processed)
+_latest_jpeg_raw = None     # pre-encoded JPEG bytes (raw)
 frame_lock = threading.Lock()
 frame_condition = threading.Condition(frame_lock)
 _frame_count = 0
@@ -51,8 +53,7 @@ CORS(flask_app, resources={
 
 
 def gen_frames(raw=False):
-    """Generate MJPEG stream frames from shared worker frame"""
-    import cv2
+    """Generate MJPEG stream frames from pre-encoded JPEG bytes"""
     label = "raw" if raw else "processed"
     print(f"[stream] Client connected to video feed ({label})")
     target_interval = 1.0 / EDGE_STREAM_MAX_FPS if EDGE_STREAM_MAX_FPS > 0 else 0.0
@@ -71,15 +72,15 @@ def gen_frames(raw=False):
             with frame_condition:
                 frame_condition.wait_for(
                     lambda: (
-                        (latest_frame_raw if raw else latest_frame) is not None
+                        (_latest_jpeg_raw if raw else _latest_jpeg) is not None
                         and _frame_version != last_version
                     ),
                     timeout=1.0,
                 )
-                frame = latest_frame_raw if raw else latest_frame
+                jpeg_bytes = _latest_jpeg_raw if raw else _latest_jpeg
                 version = _frame_version
 
-            if frame is None or version == last_version:
+            if jpeg_bytes is None or version == last_version:
                 continue
 
             if target_interval > 0.0:
@@ -88,19 +89,10 @@ def gen_frames(raw=False):
                     time.sleep(next_send_at - now)
                 next_send_at = max(next_send_at, time.monotonic()) + target_interval
 
-            ret, buffer = cv2.imencode(
-                ".jpg",
-                frame,
-                [cv2.IMWRITE_JPEG_QUALITY, EDGE_STREAM_JPEG_QUALITY],
-            )
-            if not ret:
-                last_version = version
-                continue
-
             last_version = version
             yield (
                 b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" + jpeg_bytes + b"\r\n"
             )
     finally:
         with frame_condition:
@@ -190,15 +182,35 @@ def start_flask_server():
 def update_latest_frame(frame, raw_frame=None):
     """Update the global latest frame (thread-safe)
     
+    Pre-encodes JPEG once so all streaming clients share the same bytes
+    instead of each client encoding independently.
+    
     Args:
         frame: Processed frame with ROI, bboxes, info overlay
         raw_frame: Raw frame without any overlay (for ROI editor)
     """
-    global latest_frame, latest_frame_raw, _frame_count, _last_frame_time, _frame_version
+    import cv2
+    global latest_frame, latest_frame_raw, _latest_jpeg, _latest_jpeg_raw
+    global _frame_count, _last_frame_time, _frame_version
+
+    encode_params = [cv2.IMWRITE_JPEG_QUALITY, EDGE_STREAM_JPEG_QUALITY]
+
+    # Pre-encode processed frame
+    ret, buf = cv2.imencode(".jpg", frame, encode_params)
+    jpeg = buf.tobytes() if ret else None
+
+    # Pre-encode raw frame if provided
+    jpeg_raw = None
+    if raw_frame is not None:
+        ret_raw, buf_raw = cv2.imencode(".jpg", raw_frame, encode_params)
+        jpeg_raw = buf_raw.tobytes() if ret_raw else None
+
     with frame_condition:
         latest_frame = frame
+        _latest_jpeg = jpeg
         if raw_frame is not None:
             latest_frame_raw = raw_frame
+            _latest_jpeg_raw = jpeg_raw
         _frame_count += 1
         _last_frame_time = time.time()
         _frame_version += 1

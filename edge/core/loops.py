@@ -104,8 +104,12 @@ def real_loop():
     cap_source = ""
     last_frame_id = 0
 
+    # Target ~30 fps — adaptive sleep will skip if processing already takes longer
+    TARGET_FRAME_TIME = 1.0 / 30.0
+
     while True:
-        now_ts = time.time()
+        frame_start = time.time()
+        now_ts = frame_start
         today = datetime.now().strftime("%Y-%m-%d")
 
         if today != current_date:
@@ -194,7 +198,9 @@ def real_loop():
         if frame.shape[1] != FRAME_W or frame.shape[0] != FRAME_H:
             frame = cv2.resize(frame, (FRAME_W, FRAME_H))
 
-        display_frame = frame.copy()
+        # Simpan raw_frame sebelum overlay (hanya copy jika ada client raw stream)
+        raw_frame = frame.copy() if has_raw_stream_clients() else None
+        display_frame = frame  # akan digambar overlay langsung di frame
 
         results = model(frame, size=IMG_SIZE)
         raw_detections = (
@@ -216,6 +222,9 @@ def real_loop():
         active_track_ids = list(tracks.keys())
         cleanup_old_tracks(active_track_ids)
         face_recognizer.cleanup(active_track_ids)
+
+        # Batch face detection: run InsightFace once per frame, not per track
+        face_recognizer.detect_faces_batch(frame, frame_id=last_frame_id)
 
         now_time = datetime.now()
         avg_confidence = float(np.mean([det[4] for det in detections])) if detections else 0.0
@@ -358,7 +367,6 @@ def real_loop():
             visitor_states[track_id] = state
             track.in_roi = in_roi_now
 
-        raw_frame = display_frame.copy() if has_raw_stream_clients() else None
         draw_roi_polygon(display_frame, roi)
         draw_bounding_boxes(display_frame, tracks, visitor_states)
 
@@ -377,4 +385,9 @@ def real_loop():
 
         draw_info_overlay(display_frame, info_lines)
         update_latest_frame(display_frame, raw_frame=raw_frame)
-        time.sleep(0.03)
+
+        # Adaptive sleep: hanya sleep sisa waktu jika proses lebih cepat dari target fps
+        elapsed = time.time() - frame_start
+        remaining = TARGET_FRAME_TIME - elapsed
+        if remaining > 0:
+            time.sleep(remaining)

@@ -325,8 +325,6 @@ export default function DashboardPage() {
             labels={chartLineLabels}
             data={chartLineData}
             label="Total Aktivitas"
-            pollingInterval={isToday ? 5000 : undefined}
-            day={isToday ? today : undefined}
             color="#6366f1"
           />
         </Card>

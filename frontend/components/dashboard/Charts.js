@@ -1,6 +1,5 @@
 import { Line, Bar, Doughnut, Radar, PolarArea } from "react-chartjs-2";
-import { useEffect, useRef, useState, useMemo } from "react";
-import { fetchStatsPerSecond } from "@/services/stats.service";
+import { useRef, useMemo } from "react";
 import { formatNumber } from "@/lib/utils";
 import {
   Chart as ChartJS,
@@ -38,47 +37,15 @@ function createGradient(ctx, chartArea, colorStart, colorEnd) {
   return gradient;
 }
 
-export function LineChart({ labels, data, label, pollingInterval, day, color = "#6366f1" }) {
-  const [liveLabels, setLiveLabels] = useState(labels || []);
-  const [liveData, setLiveData] = useState(data || []);
+export function LineChart({ labels, data, label, color = "#6366f1" }) {
   const chartRef = useRef(null);
-  const timer = useRef(null);
-
-  useEffect(() => {
-    if (pollingInterval && day) {
-      let stopped = false;
-      async function poll() {
-        try {
-          const res = await fetchStatsPerSecond(day);
-          if (!stopped) {
-            setLiveLabels(res.map((r) => r.second.slice(11, 19)));
-            setLiveData(res.map((r) => r.count));
-          }
-        } catch {}
-        if (!stopped) {
-          timer.current = setTimeout(poll, pollingInterval);
-        }
-      }
-      poll();
-      return () => {
-        stopped = true;
-        if (timer.current) clearTimeout(timer.current);
-      };
-    } else {
-      setLiveLabels(labels || []);
-      setLiveData(data || []);
-    }
-  }, [pollingInterval, day, labels, data]);
-
-  const finalLabels = pollingInterval && day ? liveLabels : labels;
-  const finalData = pollingInterval && day ? liveData : data;
 
   const chartData = {
-    labels: finalLabels,
+    labels: labels || [],
     datasets: [
       {
         label: label || "Statistik",
-        data: finalData,
+        data: data || [],
         fill: true,
         borderColor: color,
         backgroundColor: (context) => {

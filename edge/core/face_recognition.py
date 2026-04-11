@@ -58,7 +58,11 @@ class EmployeeFaceRecognizer:
         self._app = None
         self._track_states: Dict[int, TrackClassification] = {}
         self._employee_registry: List[Dict[str, Any]] = []
+        self._employee_matrix: Optional[np.ndarray] = None  # (N, D) stacked embeddings
         self._last_registry_refresh = 0.0
+        # Batch face detection cache: populated once per frame
+        self._frame_faces: Optional[list] = None
+        self._frame_id: Optional[int] = None
 
         if not self.enabled:
             self.reason = "disabled by config"
@@ -108,6 +112,13 @@ class EmployeeFaceRecognizer:
             )
 
         self._employee_registry = registry
+        # Pre-build matrix for vectorized matching
+        if registry:
+            self._employee_matrix = np.stack(
+                [emp["embedding"] for emp in registry], axis=0
+            )
+        else:
+            self._employee_matrix = None
         self._last_registry_refresh = now
         print(f"[face] Loaded {len(registry)} employee face embeddings")
 
@@ -124,8 +135,27 @@ class EmployeeFaceRecognizer:
     def registry_size(self) -> int:
         return len(self._employee_registry)
 
+    def detect_faces_batch(self, frame: np.ndarray, frame_id: int = 0) -> None:
+        """Run InsightFace once on full frame and cache results.
+
+        Call this once per frame BEFORE iterating over tracks with classify_track.
+        """
+        if not self.enabled or not self.available or self._app is None:
+            self._frame_faces = None
+            self._frame_id = frame_id
+            return
+
+        if self._frame_id == frame_id and self._frame_faces is not None:
+            return  # Already detected for this frame
+
+        self._frame_id = frame_id
+        try:
+            self._frame_faces = self._app.get(frame)
+        except Exception:
+            self._frame_faces = None
+
     def classify_track(self, frame: np.ndarray, track_id: int, bbox) -> Dict[str, Any]:
-        """Classify a track. Returns UNKNOWN until a face is matched or timeout fallback occurs."""
+        """Classify a track using pre-computed batch face detections."""
         now = time.time()
         state = self._track_states.get(track_id)
         if state is None:
@@ -194,55 +224,60 @@ class EmployeeFaceRecognizer:
         }
 
     def _extract_face_embedding(self, frame: np.ndarray, bbox) -> Optional[np.ndarray]:
-        if self._app is None:
+        """Match a pre-detected face from batch cache to the given track bbox using IoU."""
+        if self._frame_faces is None or len(self._frame_faces) == 0:
             return None
 
-        x1, y1, x2, y2 = bbox
-        frame_h, frame_w = frame.shape[:2]
-        w = max(1, int(x2 - x1))
-        h = max(1, int(y2 - y1))
-        pad_x = int(w * 0.15)
-        pad_y = int(h * 0.15)
+        x1, y1, x2, y2 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+        best_face = None
+        best_iou = 0.1  # minimum IoU threshold to consider a match
 
-        crop_x1 = max(0, int(x1) - pad_x)
-        crop_y1 = max(0, int(y1) - pad_y)
-        crop_x2 = min(frame_w, int(x2) + pad_x)
-        crop_y2 = min(frame_h, int(y2) + pad_y)
-        if crop_x2 <= crop_x1 or crop_y2 <= crop_y1:
+        for face in self._frame_faces:
+            fb = getattr(face, "bbox", None)
+            if fb is None or len(fb) < 4:
+                continue
+            fx1, fy1, fx2, fy2 = float(fb[0]), float(fb[1]), float(fb[2]), float(fb[3])
+
+            # Check if face center is inside track bbox (fast pre-filter)
+            fcx = (fx1 + fx2) / 2.0
+            fcy = (fy1 + fy2) / 2.0
+            if fcx < x1 or fcx > x2 or fcy < y1 or fcy > y2:
+                continue
+
+            # Compute IoU between face bbox and track bbox
+            inter_x1 = max(x1, fx1)
+            inter_y1 = max(y1, fy1)
+            inter_x2 = min(x2, fx2)
+            inter_y2 = min(y2, fy2)
+            inter_area = max(0.0, inter_x2 - inter_x1) * max(0.0, inter_y2 - inter_y1)
+            face_area = (fx2 - fx1) * (fy2 - fy1)
+            if face_area <= 0:
+                continue
+            # Use face coverage ratio (how much of face is inside track)
+            iou = inter_area / face_area
+            if iou > best_iou:
+                best_iou = iou
+                best_face = face
+
+        if best_face is None:
             return None
-
-        crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
-        if crop.size == 0:
-            return None
-
-        faces = self._app.get(crop)
-        if not faces:
-            return None
-
-        face = max(
-            faces,
-            key=lambda item: float(getattr(item, "det_score", 0.0)),
-        )
-        embedding = getattr(face, "embedding", None)
+        embedding = getattr(best_face, "embedding", None)
         if embedding is None or len(embedding) == 0:
             return None
         return _normalize_embedding(np.asarray(embedding, dtype=np.float32))
 
     def _match_employee(self, embedding: np.ndarray) -> Optional[Dict[str, Any]]:
-        best_match = None
-        best_score = -1.0
-        for employee in self._employee_registry:
-            score = float(np.dot(embedding, employee["embedding"]))
-            if score > best_score:
-                best_score = score
-                best_match = employee
-
-        if best_match is None:
+        if self._employee_matrix is None or len(self._employee_registry) == 0:
             return None
 
+        # Vectorized cosine similarity: (N,D) @ (D,) -> (N,)
+        scores = self._employee_matrix @ embedding
+        max_idx = int(np.argmax(scores))
+        best = self._employee_registry[max_idx]
+
         return {
-            "employee_id": best_match["employee_id"],
-            "employee_code": best_match["employee_code"],
-            "employee_name": best_match["employee_name"],
-            "score": best_score,
+            "employee_id": best["employee_id"],
+            "employee_code": best["employee_code"],
+            "employee_name": best["employee_name"],
+            "score": float(scores[max_idx]),
         }
