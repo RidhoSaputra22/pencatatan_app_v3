@@ -28,6 +28,8 @@ export const STREAM_URL =
   process.env.NEXT_PUBLIC_STREAM_URL || joinUrl(EDGE_PUBLIC_BASE_URL, "/video_feed");
 export const STREAM_RAW_URL =
   process.env.NEXT_PUBLIC_STREAM_RAW_URL || joinUrl(EDGE_PUBLIC_BASE_URL, "/video_feed_raw");
+export const WEBRTC_SIGNAL_URL =
+  process.env.NEXT_PUBLIC_WEBRTC_SIGNAL_URL || joinUrl(EDGE_PUBLIC_BASE_URL, "/webrtc/offer");
 export const STREAM_HEALTH_URL =
   process.env.NEXT_PUBLIC_STREAM_HEALTH_URL || joinUrl(EDGE_PUBLIC_BASE_URL, "/health");
 export const STREAM_RELAY_URL =

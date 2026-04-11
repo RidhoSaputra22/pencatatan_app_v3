@@ -1,20 +1,25 @@
 """
-Flask streaming server for processed video feed.
+WebRTC-first streaming server for processed video feed.
 
 Arsitektur:
-  - Edge worker mendeteksi + tracking manusia dari kamera sumber
-  - Frame yang sudah di-overlay (bounding box, ROI, info) disimpan ke `latest_frame`
-  - Flask server menyajikan frame tersebut sebagai MJPEG stream di /video_feed
-  - Frontend dashboard menggunakan endpoint ini untuk live preview
-
-Ini BUKAN server kamera mentah. Ini server video yang sudah diproses YOLO.
-Untuk kamera mentah (webcam), edge worker langsung membaca dari OpenCV
-tanpa perlu server terpisah (rstp_webcam_server.py).
+  - Edge worker membaca frame kamera dan menggambar overlay YOLO/tracking.
+  - Frame terbaru disimpan di memori sebagai numpy array.
+  - Browser menerima hasil proses utama lewat WebRTC video track.
+  - Endpoint MJPEG tetap disediakan sebagai fallback dan untuk ROI editor.
 """
-import time
+import asyncio
+import contextlib
+import json
 import threading
-from flask import Flask, Response, jsonify
-from flask_cors import CORS
+import time
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from .config import (
     EDGE_STREAM_ALLOW_ORIGIN,
@@ -23,16 +28,126 @@ from .config import (
     EDGE_STREAM_MAX_FPS,
     EDGE_STREAM_PORT,
     EDGE_STREAM_URL,
+    EDGE_WEBRTC_ENABLED,
+    EDGE_WEBRTC_ICE_SERVERS,
 )
 from .logger import get_logger
 
-log = get_logger("stream")
+try:
+    from aiortc import (
+        RTCConfiguration,
+        RTCIceServer,
+        RTCPeerConnection,
+        RTCSessionDescription,
+        VideoStreamTrack,
+    )
+    from av import VideoFrame
 
-# Global variable for sharing latest frame with stream server
-latest_frame = None        # processed frame (with ROI, bboxes, info overlay)
-latest_frame_raw = None     # raw frame (no overlay) for ROI editor
-_latest_jpeg = None         # pre-encoded JPEG bytes (processed)
-_latest_jpeg_raw = None     # pre-encoded JPEG bytes (raw)
+    AIORTC_AVAILABLE = True
+    AIORTC_IMPORT_ERROR = ""
+except Exception as exc:  # pragma: no cover - depends on optional runtime package
+    RTCConfiguration = None
+    RTCIceServer = None
+    RTCPeerConnection = None
+    RTCSessionDescription = None
+    VideoStreamTrack = object
+    VideoFrame = None
+    AIORTC_AVAILABLE = False
+    AIORTC_IMPORT_ERROR = str(exc)
+
+log = get_logger("stream")
+DEFAULT_ICE_SERVER_URLS = ("stun:stun.l.google.com:19302",)
+
+
+def _parse_allow_origins(raw_value: str) -> List[str]:
+    value = (raw_value or "*").strip()
+    if value == "*":
+        return ["*"]
+    return [item.strip() for item in value.split(",") if item.strip()] or ["*"]
+
+
+def _parse_ice_server_payloads(raw_value: str) -> List[Dict[str, object]]:
+    value = (raw_value or "").strip()
+    if not value:
+        return []
+
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return [{"urls": item.strip()} for item in value.split(",") if item.strip()]
+
+    if isinstance(parsed, str):
+        return [{"urls": parsed}]
+
+    if isinstance(parsed, list):
+        payloads: List[Dict[str, object]] = []
+        for item in parsed:
+            if isinstance(item, str):
+                payloads.append({"urls": item})
+            elif isinstance(item, dict) and item.get("urls"):
+                payloads.append(
+                    {
+                        "urls": item["urls"],
+                        "username": item.get("username"),
+                        "credential": item.get("credential"),
+                    }
+                )
+        return payloads
+
+    return []
+
+
+def _build_rtc_ice_servers(payloads: List[Dict[str, object]]) -> List["RTCIceServer"]:
+    if not AIORTC_AVAILABLE:
+        return []
+
+    ice_servers = []
+    for item in payloads:
+        kwargs = {"urls": item["urls"]}
+        if item.get("username"):
+            kwargs["username"] = item["username"]
+        if item.get("credential"):
+            kwargs["credential"] = item["credential"]
+        ice_servers.append(RTCIceServer(**kwargs))
+    return ice_servers
+
+
+def _default_ice_server_payloads() -> List[Dict[str, object]]:
+    return [{"urls": url} for url in DEFAULT_ICE_SERVER_URLS]
+
+
+def _sanitize_offer_sdp(sdp: str) -> Tuple[str, int]:
+    """Drop mDNS `.local` candidates which aiortc cannot reliably resolve on many hosts."""
+    removed = 0
+    filtered_lines = []
+
+    for line in sdp.replace("\r\n", "\n").split("\n"):
+        candidate = line.strip().lower()
+        if candidate.startswith("a=candidate:") and ".local" in candidate:
+            removed += 1
+            continue
+        filtered_lines.append(line)
+
+    sanitized = "\r\n".join(filtered_lines).strip()
+    if sanitized:
+        sanitized += "\r\n"
+    return sanitized, removed
+
+
+_allow_origins = _parse_allow_origins(EDGE_STREAM_ALLOW_ORIGIN)
+_ice_server_payloads = _parse_ice_server_payloads(EDGE_WEBRTC_ICE_SERVERS)
+_ice_server_source = "env"
+if not _ice_server_payloads:
+    _ice_server_payloads = _default_ice_server_payloads()
+    _ice_server_source = "default"
+_rtc_ice_servers = _build_rtc_ice_servers(_ice_server_payloads)
+
+
+# Shared frame state
+latest_frame: Optional[np.ndarray] = None
+latest_frame_raw: Optional[np.ndarray] = None
+_latest_jpeg: Optional[bytes] = None
+_latest_jpeg_raw: Optional[bytes] = None
 frame_lock = threading.Lock()
 frame_condition = threading.Condition(frame_lock)
 _frame_count = 0
@@ -40,25 +155,60 @@ _last_frame_time = 0.0
 _frame_version = 0
 _processed_clients = 0
 _raw_clients = 0
+_webrtc_viewers = 0
+_peer_connections: set = set()
 
-# Flask app for streaming
-flask_app = Flask(__name__)
-CORS(flask_app, resources={
-    r"/*": {
-        "origins": EDGE_STREAM_ALLOW_ORIGIN,
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"],
-        "expose_headers": ["Content-Type"],
-        "supports_credentials": False,
-        "max_age": 3600
+
+def _webrtc_disabled_reason() -> str:
+    if not EDGE_WEBRTC_ENABLED:
+        return "disabled by EDGE_WEBRTC_ENABLED"
+    if not AIORTC_AVAILABLE:
+        return f"aiortc unavailable: {AIORTC_IMPORT_ERROR}"
+    return ""
+
+
+def webrtc_available() -> bool:
+    return not _webrtc_disabled_reason()
+
+
+def _mjpeg_headers() -> Dict[str, str]:
+    return {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+        "X-Accel-Buffering": "no",
     }
-})
 
 
-def gen_frames(raw=False):
-    """Generate MJPEG stream frames from pre-encoded JPEG bytes"""
+def _wait_for_jpeg(last_version: int, raw: bool, timeout: float) -> Tuple[Optional[bytes], int]:
+    with frame_condition:
+        frame_condition.wait_for(
+            lambda: (
+                (_latest_jpeg_raw if raw else _latest_jpeg) is not None
+                and _frame_version != last_version
+            ),
+            timeout=timeout,
+        )
+        jpeg = _latest_jpeg_raw if raw else _latest_jpeg
+        version = _frame_version
+    return jpeg, version
+
+
+def _wait_for_frame(last_version: int, timeout: float = 1.0) -> Tuple[Optional[np.ndarray], int]:
+    with frame_condition:
+        frame_condition.wait_for(
+            lambda: latest_frame is not None and _frame_version != last_version,
+            timeout=timeout,
+        )
+        frame = latest_frame
+        version = _frame_version
+    return frame, version
+
+
+def gen_frames(raw: bool = False):
+    """Generate MJPEG stream frames from pre-encoded JPEG bytes."""
     label = "raw" if raw else "processed"
-    log.debug("Client connected to video feed (%s)", label)
+    log.debug("Client connected to MJPEG feed (%s)", label)
     target_interval = 1.0 / EDGE_STREAM_MAX_FPS if EDGE_STREAM_MAX_FPS > 0 else 0.0
     next_send_at = 0.0
     last_version = -1
@@ -72,17 +222,7 @@ def gen_frames(raw=False):
 
     try:
         while True:
-            with frame_condition:
-                frame_condition.wait_for(
-                    lambda: (
-                        (_latest_jpeg_raw if raw else _latest_jpeg) is not None
-                        and _frame_version != last_version
-                    ),
-                    timeout=1.0,
-                )
-                jpeg_bytes = _latest_jpeg_raw if raw else _latest_jpeg
-                version = _frame_version
-
+            jpeg_bytes, version = _wait_for_jpeg(last_version=last_version, raw=raw, timeout=1.0)
             if jpeg_bytes is None or version == last_version:
                 continue
 
@@ -103,117 +243,218 @@ def gen_frames(raw=False):
                 _raw_clients = max(0, _raw_clients - 1)
             else:
                 _processed_clients = max(0, _processed_clients - 1)
-        log.debug("Client disconnected from video feed (%s)", label)
+        log.debug("Client disconnected from MJPEG feed (%s)", label)
 
 
-@flask_app.route('/video_feed')
+if AIORTC_AVAILABLE:
+
+    class LatestProcessedVideoTrack(VideoStreamTrack):
+        """WebRTC track that always sends the freshest processed frame."""
+
+        def __init__(self):
+            super().__init__()
+            self._last_version = -1
+
+        async def recv(self):
+            pts, time_base = await self.next_timestamp()
+            frame, version = await asyncio.to_thread(_wait_for_frame, self._last_version, 1.0)
+            if frame is None:
+                frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+            else:
+                frame = np.ascontiguousarray(frame)
+
+            self._last_version = version
+            video_frame = VideoFrame.from_ndarray(frame, format="bgr24")
+            video_frame.pts = pts
+            video_frame.time_base = time_base
+            return video_frame
+
+else:
+
+    class LatestProcessedVideoTrack:  # pragma: no cover - only used if aiortc missing
+        pass
+
+
+class WebRTCOffer(BaseModel):
+    sdp: str
+    type: str
+
+
+stream_app = FastAPI(title="Edge Video Server", version="2.0.0")
+stream_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allow_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@stream_app.get("/video_feed")
 def video_feed():
-    """MJPEG stream endpoint — frame sudah diproses YOLO+tracking"""
-    response = Response(
+    """MJPEG fallback endpoint for processed YOLO+tracking frames."""
+    return StreamingResponse(
         gen_frames(raw=False),
-        mimetype="multipart/x-mixed-replace; boundary=frame",
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers=_mjpeg_headers(),
     )
-    response.headers["Access-Control-Allow-Origin"] = EDGE_STREAM_ALLOW_ORIGIN
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    response.headers["X-Accel-Buffering"] = "no"
-    return response
 
 
-@flask_app.route('/video_feed_raw')
+@stream_app.get("/video_feed_raw")
 def video_feed_raw():
-    """MJPEG stream endpoint — frame TANPA overlay (untuk ROI editor)"""
-    response = Response(
+    """MJPEG endpoint for raw frames without overlay (used by ROI editor)."""
+    return StreamingResponse(
         gen_frames(raw=True),
-        mimetype="multipart/x-mixed-replace; boundary=frame",
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers=_mjpeg_headers(),
     )
-    response.headers["Access-Control-Allow-Origin"] = EDGE_STREAM_ALLOW_ORIGIN
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    response.headers["X-Accel-Buffering"] = "no"
-    return response
 
 
-@flask_app.route('/health')
+@stream_app.post("/webrtc/offer")
+async def webrtc_offer(payload: WebRTCOffer):
+    """Create a recvonly WebRTC session for the processed video track."""
+    global _webrtc_viewers
+
+    if not webrtc_available():
+        raise HTTPException(status_code=503, detail=_webrtc_disabled_reason())
+
+    if payload.type != "offer":
+        raise HTTPException(status_code=400, detail="Expected SDP offer")
+
+    configuration = RTCConfiguration(iceServers=_rtc_ice_servers)
+    pc = RTCPeerConnection(configuration=configuration)
+    pc_id = f"viewer-{id(pc)}"
+    _peer_connections.add(pc)
+    _webrtc_viewers = len(_peer_connections)
+    log.info("WebRTC viewer connected: %s", pc_id)
+
+    @pc.on("connectionstatechange")
+    async def on_connectionstatechange():
+        global _webrtc_viewers
+        log.info("WebRTC state %s -> %s", pc_id, pc.connectionState)
+        if pc.connectionState in {"failed", "closed", "disconnected"}:
+            _peer_connections.discard(pc)
+            _webrtc_viewers = len(_peer_connections)
+            with contextlib.suppress(Exception):
+                await pc.close()
+
+    try:
+        remote_sdp, removed_mdns = _sanitize_offer_sdp(payload.sdp)
+        if removed_mdns:
+            log.info(
+                "Stripped %d mDNS ICE candidate(s) from browser offer; STUN/TURN candidate(s) will be used instead.",
+                removed_mdns,
+            )
+
+        pc.addTrack(LatestProcessedVideoTrack())
+        await pc.setRemoteDescription(
+            RTCSessionDescription(sdp=remote_sdp, type=payload.type)
+        )
+        answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+
+        local = pc.localDescription
+        if local is None:
+            raise HTTPException(status_code=500, detail="Failed to create WebRTC answer")
+
+        return {"sdp": local.sdp, "type": local.type}
+    except Exception:
+        _peer_connections.discard(pc)
+        _webrtc_viewers = len(_peer_connections)
+        with contextlib.suppress(Exception):
+            await pc.close()
+        raise
+
+
+@stream_app.get("/health")
 def health():
-    """Health check endpoint untuk frontend"""
-    global _frame_count, _last_frame_time
-    has_frame = latest_frame is not None
-    age_ms = int(max(0.0, time.time() - _last_frame_time) * 1000) if has_frame else None
-    return jsonify({
+    """Health check endpoint for frontend stream negotiation."""
+    with frame_condition:
+        has_frame = latest_frame is not None
+        age_ms = int(max(0.0, time.time() - _last_frame_time) * 1000) if has_frame else None
+        frame_count = _frame_count
+        mjpeg_processed_clients = _processed_clients
+        mjpeg_raw_clients = _raw_clients
+
+    return {
         "status": "ok" if has_frame else "waiting",
         "camera_source": EDGE_STREAM_URL or "not configured",
         "has_frame": has_frame,
-        "stream_endpoint": "/video_feed",
         "frame_age_ms": age_ms,
+        "frame_count": frame_count,
+        "mjpeg_fallback_endpoint": "/video_feed",
+        "raw_stream_endpoint": "/video_feed_raw",
         "jpeg_quality": EDGE_STREAM_JPEG_QUALITY,
         "max_fps": EDGE_STREAM_MAX_FPS or "worker-rate",
-        "processed_clients": _processed_clients,
-        "raw_clients": _raw_clients,
-    })
+        "mjpeg_processed_clients": mjpeg_processed_clients,
+        "mjpeg_raw_clients": mjpeg_raw_clients,
+        "webrtc_enabled": webrtc_available(),
+        "webrtc_offer_endpoint": "/webrtc/offer",
+        "webrtc_ice_servers": _ice_server_payloads,
+        "webrtc_ice_source": _ice_server_source,
+        "webrtc_viewers": _webrtc_viewers,
+        "webrtc_disabled_reason": _webrtc_disabled_reason() or None,
+    }
 
 
-@flask_app.route('/health', methods=['OPTIONS'])
-@flask_app.route('/video_feed', methods=['OPTIONS'])
-@flask_app.route('/video_feed_raw', methods=['OPTIONS'])
-def handle_options():
-    """Handle CORS preflight requests"""
-    response = flask_app.make_default_options_response()
-    response.headers['Access-Control-Allow-Origin'] = EDGE_STREAM_ALLOW_ORIGIN
-    response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
-    return response
+@stream_app.on_event("shutdown")
+async def shutdown_event():
+    """Close any remaining peer connections during server shutdown."""
+    global _webrtc_viewers
+    for pc in list(_peer_connections):
+        with contextlib.suppress(Exception):
+            await pc.close()
+    _peer_connections.clear()
+    _webrtc_viewers = 0
 
 
 def start_flask_server():
-    """Start Flask server in background thread"""
+    """Backward-compatible entry point for the edge video server."""
     log.info(
-        "Starting processed video server on http://%s:%d/video_feed",
-        EDGE_STREAM_HOST, EDGE_STREAM_PORT,
+        "Starting edge video server on http://%s:%d (WebRTC offer: /webrtc/offer, MJPEG fallback: /video_feed)",
+        EDGE_STREAM_HOST,
+        EDGE_STREAM_PORT,
     )
-    flask_app.run(
+    uvicorn.run(
+        stream_app,
         host=EDGE_STREAM_HOST,
         port=EDGE_STREAM_PORT,
-        threaded=True,
-        debug=False,
-        use_reloader=False,
+        log_level="info",
+        access_log=False,
     )
 
 
 def update_latest_frame(frame, raw_frame=None):
-    """Update the global latest frame (thread-safe)
-    
-    Pre-encodes JPEG once so all streaming clients share the same bytes
-    instead of each client encoding independently.
-    
-    Args:
-        frame: Processed frame with ROI, bboxes, info overlay
-        raw_frame: Raw frame without any overlay (for ROI editor)
-    """
+    """Update the shared frame buffers for WebRTC and MJPEG clients."""
     import cv2
+
     global latest_frame, latest_frame_raw, _latest_jpeg, _latest_jpeg_raw
     global _frame_count, _last_frame_time, _frame_version
 
     encode_params = [cv2.IMWRITE_JPEG_QUALITY, EDGE_STREAM_JPEG_QUALITY]
+    with frame_condition:
+        processed_clients = _processed_clients
+        raw_clients = _raw_clients
 
-    # Pre-encode processed frame
-    ret, buf = cv2.imencode(".jpg", frame, encode_params)
-    jpeg = buf.tobytes() if ret else None
+    processed_jpeg = None
+    raw_jpeg = None
 
-    # Pre-encode raw frame if provided
-    jpeg_raw = None
-    if raw_frame is not None:
+    if processed_clients > 0:
+        ret, buf = cv2.imencode(".jpg", frame, encode_params)
+        processed_jpeg = buf.tobytes() if ret else None
+
+    if raw_frame is not None and raw_clients > 0:
         ret_raw, buf_raw = cv2.imencode(".jpg", raw_frame, encode_params)
-        jpeg_raw = buf_raw.tobytes() if ret_raw else None
+        raw_jpeg = buf_raw.tobytes() if ret_raw else None
 
     with frame_condition:
         latest_frame = frame
-        _latest_jpeg = jpeg
+        _latest_jpeg = processed_jpeg
+
         if raw_frame is not None:
             latest_frame_raw = raw_frame
-            _latest_jpeg_raw = jpeg_raw
+        _latest_jpeg_raw = raw_jpeg
+
         _frame_count += 1
         _last_frame_time = time.time()
         _frame_version += 1
@@ -221,6 +462,6 @@ def update_latest_frame(frame, raw_frame=None):
 
 
 def has_raw_stream_clients() -> bool:
-    """Return whether the raw feed currently has any connected clients."""
-    with frame_lock:
+    """Return whether the raw MJPEG feed currently has any connected clients."""
+    with frame_condition:
         return _raw_clients > 0

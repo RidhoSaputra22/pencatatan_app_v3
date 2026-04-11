@@ -48,7 +48,8 @@ export default function StreamingStatus() {
       <p className="text-sm opacity-70 mb-3">
         Menampilkan status penerimaan stream CCTV dari client melalui UDP.
         Client menjalankan <code className="bg-base-200 px-1 rounded text-xs">streamer.py</code> untuk mengirim
-        footage ke server ini.
+        footage ke server ini. Preview hasil YOLO di dashboard sekarang diprioritaskan lewat WebRTC dari edge worker,
+        sedangkan relay ini tetap dipakai sebagai sumber kamera mentah/fallback.
       </p>
 
       {error && <Alert variant="secondary" className="mb-3">{error}</Alert>}

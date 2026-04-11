@@ -8,8 +8,10 @@ Edge worker mendeteksi manusia (YOLOv5), tracking, dan menyajikan video feed yan
 Kamera (webcam/RTSP/HTTP)
      │
      ▼
-[worker.py] ──── Flask server (port 5000)
-     │                  └── /video_feed (MJPEG, frame + overlay)
+[worker.py] ──── Edge video server (port 5000)
+     │                  └── /webrtc/offer (WebRTC signaling)
+     │                  └── /video_feed (MJPEG fallback)
+     │                  └── /video_feed_raw (ROI editor)
      │                  └── /health
      ▼
 [Backend API] ◄── kirim event kunjungan
@@ -27,7 +29,7 @@ edge/
 │   ├── __init__.py
 │   ├── config.py          # Environment configuration
 │   ├── api_client.py      # Backend API communication
-│   ├── streaming.py       # Flask video streaming server
+│   ├── streaming.py       # WebRTC video server + MJPEG fallback
 │   ├── tracker.py         # CentroidTracker class
 │   ├── detection.py       # YOLOv5 & ROI utilities
 │   ├── visualization.py   # Drawing functions
@@ -40,7 +42,7 @@ edge/
 
 ### 1. `worker.py` - Main Entry Point
 - Entry point aplikasi
-- Menginisialisasi Flask streaming server
+- Menginisialisasi edge video server
 - Memilih mode (fake/real) dan menjalankan loop yang sesuai
 
 ### 2. `core/config.py` - Configuration
@@ -60,10 +62,11 @@ edge/
 - `generate_visitor_key()` - Generate unique visitor key
 
 ### 4. `core/streaming.py` - Video Streaming
-- Flask server untuk MJPEG streaming
+- WebRTC-first server untuk browser preview
 - Thread-safe frame sharing
 - Health check endpoint
-- Route: `/video_feed` dan `/health`
+- Route utama: `/webrtc/offer`
+- Fallback/utility: `/video_feed`, `/video_feed_raw`, dan `/health`
 
 ### 5. `core/tracker.py` - Object Tracking
 - `Track` dataclass - Representasi tracked object
@@ -136,6 +139,7 @@ kombinasi yang tidak cocok bisa menyebabkan DeepSORT gagal saat warmup embedder.
 Key dependencies:
 - `opencv-python` - Computer vision
 - `torch` - YOLOv5 inference
-- `flask` - Video streaming
+- `fastapi` + `uvicorn` - Video signaling server
+- `aiortc` - WebRTC video track
 - `requests` - API communication
 - `python-dotenv` - Environment config

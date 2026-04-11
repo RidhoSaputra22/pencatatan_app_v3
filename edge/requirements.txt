@@ -3,8 +3,9 @@ requests
 python-dotenv
 numpy<2
 opencv-python-headless
-flask
-flask-cors
+fastapi==0.112.2
+uvicorn[standard]==0.30.6
+aiortc
 
 # YOLOv5
 # Keep torch/torchvision on stable CPU-compatible builds unless you explicitly

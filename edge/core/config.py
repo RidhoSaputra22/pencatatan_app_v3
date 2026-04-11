@@ -100,6 +100,8 @@ EDGE_STREAM_PORT = env_int_required("EDGE_STREAM_PORT")
 EDGE_STREAM_JPEG_QUALITY = max(50, min(95, env_int_required("EDGE_STREAM_JPEG_QUALITY")))
 EDGE_STREAM_MAX_FPS = max(0, env_int_required("EDGE_STREAM_MAX_FPS"))
 EDGE_STREAM_ALLOW_ORIGIN = env_required("EDGE_STREAM_ALLOW_ORIGIN")
+EDGE_WEBRTC_ENABLED = env_bool("EDGE_WEBRTC_ENABLED", True)
+EDGE_WEBRTC_ICE_SERVERS = env("EDGE_WEBRTC_ICE_SERVERS", "").strip()
 
 # YOLO configuration
 # YOLO_BACKEND: "yolov5" (torch.hub) | "ultralytics" (YOLOv8/v9/v10/v11 via ultralytics package)

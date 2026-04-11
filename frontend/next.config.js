@@ -47,6 +47,8 @@ const nextConfig = {
       process.env.NEXT_PUBLIC_STREAM_URL || joinUrl(edgePublicBaseUrl, "/video_feed"),
     NEXT_PUBLIC_STREAM_RAW_URL:
       process.env.NEXT_PUBLIC_STREAM_RAW_URL || joinUrl(edgePublicBaseUrl, "/video_feed_raw"),
+    NEXT_PUBLIC_WEBRTC_SIGNAL_URL:
+      process.env.NEXT_PUBLIC_WEBRTC_SIGNAL_URL || joinUrl(edgePublicBaseUrl, "/webrtc/offer"),
     NEXT_PUBLIC_STREAM_HEALTH_URL:
       process.env.NEXT_PUBLIC_STREAM_HEALTH_URL || joinUrl(edgePublicBaseUrl, "/health"),
     NEXT_PUBLIC_POLL_INTERVAL_MS: pollIntervalMs,

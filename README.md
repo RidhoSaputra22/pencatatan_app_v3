@@ -19,13 +19,14 @@ Sistem monitoring jumlah pengunjung perpustakaan berbasis CCTV dengan YOLOv5 + t
               │            Frontend (Next.js)         │
               │           http://localhost:3000       │
               └──────┬───────────────────┬───────────┘
-                     │ API               │ Video feed
+                     │ API               │ WebRTC video
                      ▼                   ▼
     ┌────────────────────┐   ┌───────────────────────────┐
     │  Backend (FastAPI)  │   │  Edge Worker (port 5000)   │
-    │  http://localhost   │   │  /video_feed (MJPEG)       │
+    │  http://localhost   │   │  /webrtc/offer             │
     │  :8000              │◄──│  YOLO + Tracking           │
-    │  SQLite DB          │   │  Kirim event → backend     │
+    │  SQLite DB          │   │  /video_feed (fallback)    │
+    │                     │   │  Kirim event → backend     │
     └────────────────────┘   └───────────┬───────────────┘
                                          │
                               ┌──────────┴──────────┐
@@ -40,7 +41,7 @@ Sistem monitoring jumlah pengunjung perpustakaan berbasis CCTV dengan YOLOv5 + t
 ## Teknologi
 
 - **Backend**: FastAPI + SQLite (SQLModel)
-- **Edge/AI**: YOLOv5 + OpenCV + DeepSORT/CentroidTracker + Flask (MJPEG stream)
+- **Edge/AI**: YOLOv5 + OpenCV + DeepSORT/CentroidTracker + FastAPI/Uvicorn + aiortc
 - **Employee filter**: InsightFace face detection + ArcFace embedding + registry pegawai
 - **Frontend**: Next.js 14
 
@@ -59,7 +60,7 @@ Sistem monitoring jumlah pengunjung perpustakaan berbasis CCTV dengan YOLOv5 + t
 │   ├── worker.py      # Entry point: jalankan YOLO + serve video
 │   ├── core/
 │   │   ├── loops.py       # Main detection loop
-│   │   ├── streaming.py   # Flask MJPEG server (port 5000)
+│   │   ├── streaming.py   # WebRTC server + MJPEG fallback (port 5000)
 │   │   ├── detection.py   # YOLOv5 wrapper
 │   │   ├── tracker.py     # DeepSORT / CentroidTracker
 │   │   ├── reid.py        # Re-identification
@@ -112,7 +113,8 @@ Edge worker akan:
 - Baca kamera dari `EDGE_STREAM_URL` (default: webcam `0`)
 - Deteksi + tracking manusia
 - Kirim event ke backend
-- Serve video feed di: http://localhost:5000/video_feed
+- Publish hasil overlay ke browser via WebRTC (`POST /webrtc/offer`)
+- Tetap expose MJPEG fallback di: http://localhost:5000/video_feed
 
 ### 3. Setup Frontend
 
@@ -138,7 +140,9 @@ DATABASE_URL=sqlite:///./visitors.db
 EDGE_MODE=real
 EDGE_CAMERA_ID=1
 EDGE_STREAM_URL=0        # "0" = webcam langsung, "rtsp://..." = IP cam
-EDGE_STREAM_PORT=5000    # Port video feed hasil YOLO
+EDGE_STREAM_PORT=5000    # Port signaling WebRTC + MJPEG fallback
+EDGE_WEBRTC_ENABLED=true
+EDGE_WEBRTC_ICE_SERVERS=[{"urls":"stun:stun.l.google.com:19302"}]
 BACKEND_URL=http://localhost:8000
 
 # Face recognition untuk filter pegawai
@@ -149,6 +153,7 @@ EMPLOYEE_MATCH_THRESHOLD=0.45
 
 # Frontend
 NEXT_PUBLIC_API_BASE=http://localhost:8000
+NEXT_PUBLIC_WEBRTC_SIGNAL_URL=http://localhost:5000/webrtc/offer
 NEXT_PUBLIC_STREAM_URL=http://localhost:5000/video_feed
 ```
 
