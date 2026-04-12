@@ -51,6 +51,11 @@ def _model_label(backend: str, weights: str) -> str:
     return f"{backend_slug}_{weight_slug}"
 
 
+def _build_output_stem(name_prefix: str) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{name_prefix}_{timestamp}"
+
+
 def _bootstrap_runtime(argv: Sequence[str]) -> None:
     """Apply CLI overrides before importing edge modules that read .env."""
     parser = argparse.ArgumentParser(add_help=False)
@@ -190,6 +195,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="Batasi jumlah frame yang diproses. 0 = semua frame.",
+    )
+    parser.add_argument(
+        "--max-seconds",
+        type=float,
+        default=0.0,
+        help="Batasi durasi footage yang diproses dalam detik. 0 = proses sampai selesai.",
     )
     parser.add_argument(
         "--frame-step",
@@ -526,6 +537,8 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     name_prefix = args.output_name.strip() or input_path.stem
+    output_stem = _build_output_stem(name_prefix)
+
     active_backend = os.getenv("YOLO_BACKEND", args.backend)
     active_weights = os.getenv("YOLOV5_WEIGHTS", args.weights)
     model_label = _model_label(active_backend, active_weights)
@@ -554,9 +567,9 @@ def main() -> int:
 
         roi = _load_roi(args.roi_json, frame_width, frame_height)
 
-        video_path = model_output_dir / f"{name_prefix}_tracking.mp4"
-        csv_path = model_output_dir / f"{name_prefix}_tracks.csv"
-        summary_path = model_output_dir / f"{name_prefix}_summary.json"
+        video_path = model_output_dir / f"{output_stem}_tracking.mp4"
+        csv_path = model_output_dir / f"{output_stem}_tracks.csv"
+        summary_path = model_output_dir / f"{output_stem}_summary.json"
 
         writer = cv2.VideoWriter(
             str(video_path),
@@ -616,11 +629,17 @@ def main() -> int:
         csv_rows = 0
         source_frame_index = 0
 
+        max_source_frames_by_seconds = 0
+        if args.max_seconds > 0:
+            effective_source_fps = source_fps if source_fps > 0 else 30.0
+            max_source_frames_by_seconds = max(1, int(args.max_seconds * effective_source_fps))
+
         print(f"[info] input   : {input_path}")
         print(f"[info] model   : {model_label}")
         print(f"[info] out dir : {model_output_dir}")
         print(f"[info] output  : {video_path}")
         print(f"[info] csv     : {csv_path}")
+        print(f"[info] summary : {summary_path}")
         print(f"[info] tracker : {tracker_backend_runtime}")
         print(f"[info] yolo    : {active_backend} | weights={active_weights}")
         print(f"[info] reid    : threshold={os.getenv('REID_MATCH_THRESHOLD', '0.77')}")
@@ -635,6 +654,7 @@ def main() -> int:
             f"[info] face    : "
             f"{'enabled' if face_recognizer.enabled and face_recognizer.available else 'disabled'}"
         )
+        print(f"[info] limit   : max_frames={args.max_frames} | max_seconds={args.max_seconds}")
 
         with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
             writer_csv = csv.DictWriter(csv_file, fieldnames=TRACK_CSV_FIELDS)
@@ -646,6 +666,10 @@ def main() -> int:
                     break
 
                 source_frame_index += 1
+
+                if max_source_frames_by_seconds > 0 and source_frame_index > max_source_frames_by_seconds:
+                    break
+
                 if args.frame_step > 1 and (source_frame_index - 1) % args.frame_step != 0:
                     continue
 
@@ -910,6 +934,8 @@ def main() -> int:
             "model_output_dir": str(model_output_dir),
             "output_video": str(video_path),
             "output_csv": str(csv_path),
+            "output_summary": str(summary_path),
+            "output_stem": output_stem,
             "tracker_backend": tracker_backend_runtime,
             "yolo_backend": active_backend,
             "weights": active_weights,
@@ -924,6 +950,8 @@ def main() -> int:
             "frames_processed": processed_frames,
             "frames_with_detections": frames_with_detections,
             "track_rows_written": csv_rows,
+            "requested_max_frames": args.max_frames,
+            "requested_max_seconds": args.max_seconds,
             "unique_visitors": peak_unique_visitors_visible,
             "unique_visitors_mode": "peak_visible",
             "cumulative_unique_visitors": len(canonical_seen_visitor_keys),

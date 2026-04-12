@@ -12,6 +12,8 @@ import contextlib
 import json
 import threading
 import time
+from collections import deque
+from fractions import Fraction
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -22,6 +24,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from .config import (
+    EDGE_PROCESSING_MAX_FPS,
     EDGE_STREAM_ALLOW_ORIGIN,
     EDGE_STREAM_HOST,
     EDGE_STREAM_JPEG_QUALITY,
@@ -57,6 +60,8 @@ except Exception as exc:  # pragma: no cover - depends on optional runtime packa
 
 log = get_logger("stream")
 DEFAULT_ICE_SERVER_URLS = ("stun:stun.l.google.com:19302",)
+WEBRTC_VIDEO_CLOCK_RATE = 90_000
+WEBRTC_DEFAULT_FPS = 30.0
 
 
 def _parse_allow_origins(raw_value: str) -> List[str]:
@@ -153,6 +158,7 @@ frame_condition = threading.Condition(frame_lock)
 _frame_count = 0
 _last_frame_time = 0.0
 _frame_version = 0
+_frame_timestamps = deque(maxlen=90)
 _processed_clients = 0
 _raw_clients = 0
 _webrtc_viewers = 0
@@ -178,6 +184,38 @@ def _mjpeg_headers() -> Dict[str, str]:
         "Expires": "0",
         "X-Accel-Buffering": "no",
     }
+
+
+def _stream_frame_interval() -> float:
+    return 1.0 / EDGE_STREAM_MAX_FPS if EDGE_STREAM_MAX_FPS > 0 else 0.0
+
+
+def _get_latest_frame_snapshot() -> Tuple[Optional[np.ndarray], int]:
+    with frame_condition:
+        frame = latest_frame
+        version = _frame_version
+    return frame, version
+
+
+def _get_latest_jpeg_snapshot(raw: bool = False) -> Tuple[Optional[bytes], int]:
+    with frame_condition:
+        jpeg = _latest_jpeg_raw if raw else _latest_jpeg
+        version = _frame_version
+    return jpeg, version
+
+
+def _estimate_publish_fps() -> float:
+    with frame_condition:
+        timestamps = list(_frame_timestamps)
+
+    if len(timestamps) < 2:
+        return 0.0
+
+    elapsed = timestamps[-1] - timestamps[0]
+    if elapsed <= 0:
+        return 0.0
+
+    return round((len(timestamps) - 1) / elapsed, 2)
 
 
 def _wait_for_jpeg(last_version: int, raw: bool, timeout: float) -> Tuple[Optional[bytes], int]:
@@ -209,9 +247,10 @@ def gen_frames(raw: bool = False):
     """Generate MJPEG stream frames from pre-encoded JPEG bytes."""
     label = "raw" if raw else "processed"
     log.debug("Client connected to MJPEG feed (%s)", label)
-    target_interval = 1.0 / EDGE_STREAM_MAX_FPS if EDGE_STREAM_MAX_FPS > 0 else 0.0
+    target_interval = _stream_frame_interval()
     next_send_at = 0.0
     last_version = -1
+    last_payload = None
 
     global _processed_clients, _raw_clients
     with frame_condition:
@@ -222,17 +261,28 @@ def gen_frames(raw: bool = False):
 
     try:
         while True:
-            jpeg_bytes, version = _wait_for_jpeg(last_version=last_version, raw=raw, timeout=1.0)
-            if jpeg_bytes is None or version == last_version:
-                continue
-
             if target_interval > 0.0:
                 now = time.monotonic()
                 if next_send_at > now:
                     time.sleep(next_send_at - now)
                 next_send_at = max(next_send_at, time.monotonic()) + target_interval
 
+                jpeg_bytes, version = _get_latest_jpeg_snapshot(raw=raw)
+                if jpeg_bytes is None:
+                    jpeg_bytes, version = _wait_for_jpeg(last_version=last_version, raw=raw, timeout=1.0)
+                    if jpeg_bytes is None:
+                        continue
+                elif version == last_version and last_payload is not None:
+                    jpeg_bytes = last_payload
+                elif version == last_version:
+                    continue
+            else:
+                jpeg_bytes, version = _wait_for_jpeg(last_version=last_version, raw=raw, timeout=1.0)
+                if jpeg_bytes is None or version == last_version:
+                    continue
+
             last_version = version
+            last_payload = jpeg_bytes
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n\r\n" + jpeg_bytes + b"\r\n"
@@ -254,19 +304,38 @@ if AIORTC_AVAILABLE:
         def __init__(self):
             super().__init__()
             self._last_version = -1
+            self._frame_interval = _stream_frame_interval()
+            self._pts = None
+            effective_fps = EDGE_STREAM_MAX_FPS if EDGE_STREAM_MAX_FPS > 0 else WEBRTC_DEFAULT_FPS
+            self._pts_step = max(1, int(WEBRTC_VIDEO_CLOCK_RATE / effective_fps))
+            self._next_send_at = time.monotonic()
 
         async def recv(self):
-            pts, time_base = await self.next_timestamp()
-            frame, version = await asyncio.to_thread(_wait_for_frame, self._last_version, 1.0)
+            if self._frame_interval > 0.0:
+                now = time.monotonic()
+                if self._next_send_at > now:
+                    await asyncio.sleep(self._next_send_at - now)
+                self._next_send_at = max(self._next_send_at + self._frame_interval, time.monotonic())
+                frame, version = _get_latest_frame_snapshot()
+                if frame is None:
+                    frame, version = await asyncio.to_thread(_wait_for_frame, self._last_version, 1.0)
+            else:
+                frame, version = await asyncio.to_thread(_wait_for_frame, self._last_version, 1.0)
+
             if frame is None:
                 frame = np.zeros((720, 1280, 3), dtype=np.uint8)
             else:
                 frame = np.ascontiguousarray(frame)
 
+            if self._pts is None:
+                self._pts = 0
+            else:
+                self._pts += self._pts_step
+
             self._last_version = version
             video_frame = VideoFrame.from_ndarray(frame, format="bgr24")
-            video_frame.pts = pts
-            video_frame.time_base = time_base
+            video_frame.pts = self._pts
+            video_frame.time_base = Fraction(1, WEBRTC_VIDEO_CLOCK_RATE)
             return video_frame
 
 else:
@@ -375,6 +444,7 @@ def health():
         frame_count = _frame_count
         mjpeg_processed_clients = _processed_clients
         mjpeg_raw_clients = _raw_clients
+        frame_shape = list(latest_frame.shape[:2]) if latest_frame is not None else None
 
     return {
         "status": "ok" if has_frame else "waiting",
@@ -382,10 +452,13 @@ def health():
         "has_frame": has_frame,
         "frame_age_ms": age_ms,
         "frame_count": frame_count,
+        "frame_shape": frame_shape,
+        "frame_publish_fps": _estimate_publish_fps(),
         "mjpeg_fallback_endpoint": "/video_feed",
         "raw_stream_endpoint": "/video_feed_raw",
         "jpeg_quality": EDGE_STREAM_JPEG_QUALITY,
-        "max_fps": EDGE_STREAM_MAX_FPS or "worker-rate",
+        "stream_target_fps": EDGE_STREAM_MAX_FPS or WEBRTC_DEFAULT_FPS,
+        "processing_target_fps": EDGE_PROCESSING_MAX_FPS or "unlimited",
         "mjpeg_processed_clients": mjpeg_processed_clients,
         "mjpeg_raw_clients": mjpeg_raw_clients,
         "webrtc_enabled": webrtc_available(),
@@ -457,6 +530,7 @@ def update_latest_frame(frame, raw_frame=None):
 
         _frame_count += 1
         _last_frame_time = time.time()
+        _frame_timestamps.append(_last_frame_time)
         _frame_version += 1
         frame_condition.notify_all()
 

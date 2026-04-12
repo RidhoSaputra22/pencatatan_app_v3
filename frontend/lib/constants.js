@@ -22,6 +22,8 @@ function joinUrl(base, pathname) {
 // API Configuration
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "";
 export const EDGE_PUBLIC_BASE_URL = process.env.NEXT_PUBLIC_EDGE_PUBLIC_BASE_URL || "";
+export const APP_ENV = process.env.NEXT_PUBLIC_APP_ENV || "";
+export const IS_DEV_ENV = APP_ENV.trim().toLowerCase() === "dev";
 
 // Edge worker streaming endpoints
 export const STREAM_URL =

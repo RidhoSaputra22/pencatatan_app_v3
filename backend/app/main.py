@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from sqlalchemy import or_, text
+from sqlalchemy import delete, func, or_, text
 from sqlmodel import Session, select
 
 from .settings import settings
@@ -1193,6 +1193,50 @@ def reset_database(
     except Exception as e:
         session.rollback()
         raise HTTPException(status_code=500, detail=f"Error reset database: {str(e)}")
+
+
+@app.post("/api/admin/reset-daily")
+def reset_daily_database(
+    day: date = Query(..., description="Tanggal reset (YYYY-MM-DD)"),
+    session: Session = Depends(get_session),
+    user: User = Depends(require_role("ADMIN")),
+):
+    """
+    Reset data pengunjung untuk satu hari tertentu.
+    Endpoint ini hanya tersedia saat APP_ENV=dev.
+    """
+    if settings.app_env.strip().lower() != "dev":
+        raise HTTPException(status_code=403, detail="Reset harian hanya tersedia saat APP_ENV=dev")
+
+    day_label = day.isoformat()
+
+    try:
+        visit_events_deleted = session.exec(
+            delete(VisitEvent).where(func.date(VisitEvent.event_time) == day_label)
+        )
+        visitor_daily_deleted = session.exec(
+            delete(VisitorDaily).where(VisitorDaily.visit_date == day)
+        )
+        daily_stats_deleted = session.exec(
+            delete(DailyStats).where(DailyStats.stat_date == day)
+        )
+
+        session.commit()
+
+        return {
+            "status": "success",
+            "message": f"Data visitor untuk {day_label} berhasil direset",
+            "reset_by": user.username,
+            "day": day_label,
+            "deleted": {
+                "visit_events": max(int(visit_events_deleted.rowcount or 0), 0),
+                "visitor_daily": max(int(visitor_daily_deleted.rowcount or 0), 0),
+                "daily_stats": max(int(daily_stats_deleted.rowcount or 0), 0),
+            },
+        }
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Error reset harian: {str(e)}")
 
 @app.get("/api/stats/per_second")
 def stats_per_second(

@@ -17,7 +17,10 @@ from .capture import LatestFrameCapture, is_video_file
 from .config import (
     CAMERA_ID,
     CONFIG_REFRESH,
+    EDGE_PROCESSING_MAX_FPS,
+    EDGE_STREAM_MAX_FPS,
     EDGE_STREAM_URL,
+    FACE_DETECTION_FRAME_INTERVAL,
     IMG_SIZE,
     TRACK_CONFIRM_FRAMES,
     TRACK_MAX_DISAPPEARED,
@@ -84,6 +87,12 @@ def real_loop():
     face_recognizer = EmployeeFaceRecognizer()
 
     log.info("Running in REAL mode (%s + employee filtering)", tracker_mode)
+    log.info(
+        "Runtime tuning: processing_target=%s fps | stream_target=%s fps | face_interval=%s frame(s)",
+        EDGE_PROCESSING_MAX_FPS or "unlimited",
+        EDGE_STREAM_MAX_FPS or "worker-rate",
+        FACE_DETECTION_FRAME_INTERVAL,
+    )
 
     if DEEPSORT_AVAILABLE:
         tracker = DeepSORTTracker(
@@ -108,8 +117,9 @@ def real_loop():
     cap_source = ""
     last_frame_id = 0
 
-    # Target ~30 fps — adaptive sleep will skip if processing already takes longer
-    TARGET_FRAME_TIME = 1.0 / 30.0
+    # Processing cadence is independent from stream cadence; the stream layer can
+    # duplicate the latest annotated frame between inference updates.
+    TARGET_FRAME_TIME = 1.0 / EDGE_PROCESSING_MAX_FPS if EDGE_PROCESSING_MAX_FPS > 0 else 0.0
 
     while True:
         frame_start = time.time()
@@ -228,8 +238,10 @@ def real_loop():
         cleanup_old_tracks(active_track_ids)
         face_recognizer.cleanup(active_track_ids)
 
-        # Batch face detection: run InsightFace once per frame, not per track
-        face_recognizer.detect_faces_batch(frame, frame_id=last_frame_id)
+        # Face recognition is the second-heaviest stage after YOLO, so only refresh
+        # the batch detector while there are active tracks that still need classification.
+        if face_recognizer.needs_detection(active_track_ids):
+            face_recognizer.detect_faces_batch(frame, frame_id=last_frame_id)
 
         now_time = datetime.now()
         avg_confidence = float(np.mean([det[4] for det in detections])) if detections else 0.0

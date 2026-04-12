@@ -13,6 +13,7 @@ from .config import (
     EMPLOYEE_MATCH_THRESHOLD,
     EMPLOYEE_REGISTRY_REFRESH_SECONDS,
     FACE_RECHECK_SECONDS,
+    FACE_DETECTION_FRAME_INTERVAL,
     FACE_UNKNOWN_TIMEOUT,
 )
 from .logger import get_logger
@@ -66,6 +67,7 @@ class EmployeeFaceRecognizer:
         # Batch face detection cache: populated once per frame
         self._frame_faces: Optional[list] = None
         self._frame_id: Optional[int] = None
+        self._last_detected_frame_id: Optional[int] = None
 
         if not self.enabled:
             self.reason = "disabled by config"
@@ -128,6 +130,9 @@ class EmployeeFaceRecognizer:
     def reset_daily(self) -> None:
         """Reset active track classifications on date rollover."""
         self._track_states = {}
+        self._frame_faces = None
+        self._frame_id = None
+        self._last_detected_frame_id = None
 
     def cleanup(self, active_track_ids: List[int]) -> None:
         stale_ids = [tid for tid in self._track_states if tid not in active_track_ids]
@@ -137,6 +142,17 @@ class EmployeeFaceRecognizer:
     @property
     def registry_size(self) -> int:
         return len(self._employee_registry)
+
+    def needs_detection(self, active_track_ids: List[int]) -> bool:
+        """Return True when at least one active track still needs face classification."""
+        if not self.enabled or not self.available or not self._employee_registry or not active_track_ids:
+            return False
+
+        for track_id in active_track_ids:
+            state = self._track_states.get(track_id)
+            if state is None or not state.stable:
+                return True
+        return False
 
     def detect_faces_batch(self, frame: np.ndarray, frame_id: int = 0) -> None:
         """Run InsightFace once on full frame and cache results.
@@ -151,9 +167,18 @@ class EmployeeFaceRecognizer:
         if self._frame_id == frame_id and self._frame_faces is not None:
             return  # Already detected for this frame
 
+        if (
+            self._last_detected_frame_id is not None
+            and frame_id - self._last_detected_frame_id < FACE_DETECTION_FRAME_INTERVAL
+        ):
+            self._frame_faces = None
+            self._frame_id = frame_id
+            return
+
         self._frame_id = frame_id
         try:
             self._frame_faces = self._app.get(frame)
+            self._last_detected_frame_id = frame_id
         except Exception:
             self._frame_faces = None
 

@@ -97,11 +97,18 @@ CONFIG_REFRESH = env_int_required("EDGE_CONFIG_REFRESH_SECONDS")
 EDGE_STREAM_URL = env("EDGE_STREAM_URL", "").strip()
 EDGE_STREAM_HOST = env_required("EDGE_STREAM_HOST")
 EDGE_STREAM_PORT = env_int_required("EDGE_STREAM_PORT")
-EDGE_STREAM_JPEG_QUALITY = max(50, min(95, env_int_required("EDGE_STREAM_JPEG_QUALITY")))
-EDGE_STREAM_MAX_FPS = max(0, env_int_required("EDGE_STREAM_MAX_FPS"))
+EDGE_STREAM_JPEG_QUALITY = max(10, min(95, env_int_required("EDGE_STREAM_JPEG_QUALITY")))
+EDGE_STREAM_MAX_FPS = max(0.0, env_float("EDGE_STREAM_MAX_FPS", 0.0))
+EDGE_PROCESSING_MAX_FPS = max(0.0, env_float("EDGE_PROCESSING_MAX_FPS", 12.0))
 EDGE_STREAM_ALLOW_ORIGIN = env_required("EDGE_STREAM_ALLOW_ORIGIN")
 EDGE_WEBRTC_ENABLED = env_bool("EDGE_WEBRTC_ENABLED", True)
 EDGE_WEBRTC_ICE_SERVERS = env("EDGE_WEBRTC_ICE_SERVERS", "").strip()
+EDGE_CAPTURE_OPEN_TIMEOUT_MS = max(1_000, env_int("EDGE_CAPTURE_OPEN_TIMEOUT_MS", 10_000))
+EDGE_CAPTURE_READ_TIMEOUT_MS = max(250, env_int("EDGE_CAPTURE_READ_TIMEOUT_MS", 3_000))
+EDGE_CAPTURE_FFMPEG_OPTIONS = env(
+    "EDGE_CAPTURE_FFMPEG_OPTIONS",
+    "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|max_delay;500000|reorder_queue_size;0",
+).strip()
 
 # YOLO configuration
 # YOLO_BACKEND: "yolov5" (torch.hub) | "ultralytics" (YOLOv8/v9/v10/v11 via ultralytics package)
@@ -140,6 +147,7 @@ EMPLOYEE_MATCH_THRESHOLD = env_float_required("EMPLOYEE_MATCH_THRESHOLD")
 EMPLOYEE_REGISTRY_REFRESH_SECONDS = env_int_required("EMPLOYEE_REGISTRY_REFRESH_SECONDS")
 FACE_RECHECK_SECONDS = env_float_required("FACE_RECHECK_SECONDS")
 FACE_UNKNOWN_TIMEOUT = env_float_required("FACE_UNKNOWN_TIMEOUT")
+FACE_DETECTION_FRAME_INTERVAL = max(1, env_int("FACE_DETECTION_FRAME_INTERVAL", 3))
 
 # Backend API configuration
 BACKEND_URL = env_required("BACKEND_URL")

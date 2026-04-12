@@ -23,6 +23,7 @@ const backendUrl = requireEnv("BACKEND_URL");
 const edgePublicBaseUrl = requireEnv("EDGE_PUBLIC_BASE_URL");
 const pollIntervalMs = requireEnv("NEXT_PUBLIC_POLL_INTERVAL_MS");
 const streamHealthIntervalMs = requireEnv("NEXT_PUBLIC_STREAM_HEALTH_INTERVAL_MS");
+const appEnv = (process.env.NEXT_PUBLIC_APP_ENV || process.env.APP_ENV || "").trim();
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -53,6 +54,7 @@ const nextConfig = {
       process.env.NEXT_PUBLIC_STREAM_HEALTH_URL || joinUrl(edgePublicBaseUrl, "/health"),
     NEXT_PUBLIC_POLL_INTERVAL_MS: pollIntervalMs,
     NEXT_PUBLIC_STREAM_HEALTH_INTERVAL_MS: streamHealthIntervalMs,
+    NEXT_PUBLIC_APP_ENV: appEnv,
   },
 
   images: {

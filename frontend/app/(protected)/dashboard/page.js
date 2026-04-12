@@ -1,6 +1,7 @@
 "use client";
 
 import { useAuth } from "@/context/AuthContext";
+import { useToast } from "@/context/ToastContext";
 import { useStats } from "@/hooks/useStats";
 
 import DateFilter from "@/components/dashboard/DateFilter";
@@ -11,13 +12,17 @@ import CameraView from "@/components/dashboard/CameraView";
 import StatsTable from "@/components/dashboard/StatsTable";
 import ExportSection from "@/components/dashboard/ExportSection";
 import Alert from "@/components/ui/Alert";
+import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import { formatNumber } from "@/lib/utils";
+import { IS_DEV_ENV, ROLE_ADMIN } from "@/lib/constants";
+import { resetDailyStats } from "@/services/stats.service";
 import CountUp from "react-countup";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 export default function DashboardPage() {
   const { user } = useAuth();
+  const { showToast } = useToast();
   const {
     day,
     today,
@@ -40,6 +45,7 @@ export default function DashboardPage() {
     filterTo,
     setFilterTo,
   } = useStats();
+  const [isResettingDaily, setIsResettingDaily] = useState(false);
 
   // Chart data for range modes
   const rangeLabels = daily.map((r) => r.stat_date || r.date || "-");
@@ -106,6 +112,43 @@ export default function DashboardPage() {
     };
   }, [daily]);
 
+  const showDevResetTools = IS_DEV_ENV && user?.role === ROLE_ADMIN;
+  const resetTargetDay = useMemo(() => {
+    if (filterFrom && filterTo && filterFrom === filterTo) {
+      return filterFrom;
+    }
+    return null;
+  }, [filterFrom, filterTo]);
+
+  async function handleResetDaily() {
+    if (!resetTargetDay || isResettingDaily) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Reset semua data visitor untuk ${resetTargetDay}? Aksi ini hanya untuk mode dev dan tidak bisa dibatalkan.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setIsResettingDaily(true);
+    try {
+      const result = await resetDailyStats(resetTargetDay);
+      await reload();
+      const deleted = result?.deleted || {};
+      showToast(
+        "success",
+        `${result?.message || `Data visitor untuk ${resetTargetDay} berhasil direset`}. ` +
+          `Event: ${deleted.visit_events ?? 0}, unik: ${deleted.visitor_daily ?? 0}, statistik: ${deleted.daily_stats ?? 0}.`,
+      );
+    } catch (err) {
+      showToast("error", err.message || "Gagal mereset data visitor harian.");
+    } finally {
+      setIsResettingDaily(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* ===== HEADER ===== */}
@@ -161,15 +204,47 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <DateFilter
-          filterMode={filterMode}
-          setFilterMode={setFilterMode}
-          filterFrom={filterFrom}
-          setFilterFrom={setFilterFrom}
-          filterTo={filterTo}
-          setFilterTo={setFilterTo}
-          today={today}
-        />
+        <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+          <DateFilter
+            filterMode={filterMode}
+            setFilterMode={setFilterMode}
+            filterFrom={filterFrom}
+            setFilterFrom={setFilterFrom}
+            filterTo={filterTo}
+            setFilterTo={setFilterTo}
+            today={today}
+          />
+
+          {showDevResetTools && (
+            <div className="flex flex-wrap items-center gap-3 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3">
+              <span className="inline-flex items-center rounded-full bg-warning/20 px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.2em] text-warning">
+                Dev Only
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-base-content">
+                  Reset harian dashboard
+                </p>
+                <p className="text-xs text-base-content/60">
+                  {resetTargetDay
+                    ? `Hapus data visitor untuk ${resetTargetDay}.`
+                    : "Pilih tepat satu hari agar reset harian bisa dijalankan."}
+                </p>
+              </div>
+              <Button
+                variant="warning"
+                size="sm"
+                outline
+                isSubmit={false}
+                loading={isResettingDaily}
+                disabled={!resetTargetDay}
+                onClick={handleResetDaily}
+                className="ml-auto"
+              >
+                Reset Harian
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
 
       {error && <Alert variant="error">{error}</Alert>}

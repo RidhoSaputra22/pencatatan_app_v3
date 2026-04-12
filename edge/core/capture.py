@@ -6,6 +6,11 @@ from typing import Any, List, Optional, Tuple
 import cv2
 import numpy as np
 
+from .config import (
+    EDGE_CAPTURE_FFMPEG_OPTIONS,
+    EDGE_CAPTURE_OPEN_TIMEOUT_MS,
+    EDGE_CAPTURE_READ_TIMEOUT_MS,
+)
 from .logger import get_logger
 
 log = get_logger("capture")
@@ -39,12 +44,16 @@ def open_video_capture(source: str):
         log.info("Opening video file: %s", source)
         capture = cv2.VideoCapture(source)
     else:
+        if EDGE_CAPTURE_FFMPEG_OPTIONS and "OPENCV_FFMPEG_CAPTURE_OPTIONS" not in os.environ:
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = EDGE_CAPTURE_FFMPEG_OPTIONS
+            log.info("Using OpenCV FFmpeg capture options: %s", EDGE_CAPTURE_FFMPEG_OPTIONS)
+
         # Network stream (HTTP/RTSP): set timeouts so capture.read() never blocks
         # indefinitely. Without these, calling capture.release() while the reader
         # thread is blocked in capture.read() causes a SIGSEGV in FFmpeg internals.
         capture = cv2.VideoCapture(source)
-        capture.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10_000)  # 10 s connect timeout
-        capture.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 3_000)   # 3 s per-frame timeout
+        capture.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, EDGE_CAPTURE_OPEN_TIMEOUT_MS)
+        capture.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, EDGE_CAPTURE_READ_TIMEOUT_MS)
 
     capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     return capture

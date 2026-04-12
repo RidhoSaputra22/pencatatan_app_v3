@@ -157,6 +157,24 @@ NEXT_PUBLIC_WEBRTC_SIGNAL_URL=http://localhost:5000/webrtc/offer
 NEXT_PUBLIC_STREAM_URL=http://localhost:5000/video_feed
 ```
 
+### Tuning Live Stream Yang Direkomendasikan
+
+Untuk preview dashboard yang lebih smooth, pakai kombinasi berikut:
+
+```env
+EDGE_STREAM_MAX_FPS=15
+EDGE_PROCESSING_MAX_FPS=12
+YOLOV5_IMG_SIZE=512
+YOLOV5_WEIGHTS=./edge/yolo26n.pt
+FACE_DETECTION_FRAME_INTERVAL=3
+NEXT_PUBLIC_STREAM_HEALTH_INTERVAL_MS=15000
+```
+
+Catatan:
+- `EDGE_PROCESSING_MAX_FPS` membatasi ritme inferensi/tracking agar CPU/GPU tidak penuh terus.
+- `EDGE_STREAM_MAX_FPS` mengatur ritme frame ke browser; stream akan mengulang frame terakhir jika inferensi lebih lambat.
+- `FACE_DETECTION_FRAME_INTERVAL` mengurangi beban InsightFace dengan tidak menjalankan deteksi wajah di setiap frame.
+
 ## Kamera: Webcam vs RTSP
 
 ### Webcam Langsung (paling mudah)

@@ -65,3 +65,10 @@ export function fetchVisitorDaily(fromDate, toDate) {
 export function resetDatabase() {
   return post("/api/admin/reset-db", {});
 }
+
+/**
+ * POST /api/admin/reset-daily?day=YYYY-MM-DD — reset data visitor untuk 1 hari.
+ */
+export function resetDailyStats(day) {
+  return post(`/api/admin/reset-daily?day=${encodeURIComponent(day)}`, {});
+}
