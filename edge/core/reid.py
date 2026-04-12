@@ -6,6 +6,7 @@ import hashlib
 from typing import Optional, List, Dict, Any, Tuple
 import numpy as np
 
+from .config import REID_MATCH_THRESHOLD
 from .logger import get_logger
 
 log = get_logger("reid")
@@ -135,7 +136,7 @@ def update_track_embedding(track_id: int, embedding: np.ndarray, camera_id: int,
         return cache['visitor_key']
     
     # New track - check if similar visitor already exists today
-    existing_key = find_similar_embedding(embedding, threshold=0.65)
+    existing_key = find_similar_embedding(embedding, threshold=REID_MATCH_THRESHOLD)
     
     if existing_key:
         # Same person re-entered - use existing visitor_key

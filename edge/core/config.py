@@ -118,6 +118,7 @@ REPO = resolve_project_path(env("YOLOV5_REPO", "").strip()) if env("YOLOV5_REPO"
 TRACK_MAX_DISAPPEARED = env_int_required("TRACK_MAX_DISAPPEARED")
 TRACK_MAX_DISTANCE = env_float_required("TRACK_MAX_DISTANCE")
 TRACK_CONFIRM_FRAMES = max(1, env_int_required("TRACK_CONFIRM_FRAMES"))
+REID_MATCH_THRESHOLD = env_float("REID_MATCH_THRESHOLD", 0.77)
 
 # Face recognition configuration
 FACE_RECOGNITION_ENABLED = env_bool_required("FACE_RECOGNITION_ENABLED")

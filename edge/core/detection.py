@@ -1,7 +1,7 @@
 """YOLO detection and ROI utilities — supports YOLOv5 (torch.hub) and Ultralytics (YOLOv8+)"""
 import json
 import warnings
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Tuple
 import numpy as np
 import cv2
 
@@ -168,6 +168,108 @@ def load_model():
         f"Unknown YOLO_BACKEND={backend!r}. "
         "Supported values: 'yolov5', 'ultralytics'"
     )
+
+
+def _bbox_area(box: Tuple[float, float, float, float]) -> float:
+    return max(0.0, float(box[2]) - float(box[0])) * max(0.0, float(box[3]) - float(box[1]))
+
+
+def _bbox_intersection(
+    box_a: Tuple[float, float, float, float],
+    box_b: Tuple[float, float, float, float],
+) -> float:
+    inter_x1 = max(float(box_a[0]), float(box_b[0]))
+    inter_y1 = max(float(box_a[1]), float(box_b[1]))
+    inter_x2 = min(float(box_a[2]), float(box_b[2]))
+    inter_y2 = min(float(box_a[3]), float(box_b[3]))
+    inter_w = max(0.0, inter_x2 - inter_x1)
+    inter_h = max(0.0, inter_y2 - inter_y1)
+    return inter_w * inter_h
+
+
+def _coverage_ratio(
+    box_a: Tuple[float, float, float, float],
+    box_b: Tuple[float, float, float, float],
+) -> Tuple[float, float]:
+    inter_area = _bbox_intersection(box_a, box_b)
+    area_a = _bbox_area(box_a)
+    area_b = _bbox_area(box_b)
+    cov_a = inter_area / area_a if area_a > 0 else 0.0
+    cov_b = inter_area / area_b if area_b > 0 else 0.0
+    return cov_a, cov_b
+
+
+def _is_nested_duplicate(
+    candidate: Tuple[float, float, float, float, float],
+    existing: Tuple[float, float, float, float, float],
+    containment_threshold: float = 0.9,
+    x_alignment_ratio: float = 0.25,
+    height_ratio_threshold: float = 1.2,
+) -> bool:
+    cand_box = candidate[:4]
+    exist_box = existing[:4]
+    cand_area = _bbox_area(cand_box)
+    exist_area = _bbox_area(exist_box)
+    if cand_area <= 0 or exist_area <= 0:
+        return False
+
+    cov_candidate, cov_existing = _coverage_ratio(cand_box, exist_box)
+
+    # Case 1: almost identical boxes.
+    if cov_candidate >= containment_threshold and cov_existing >= containment_threshold:
+        return True
+
+    # Case 2: upper-body / partial-body box almost fully contained within a full-body box.
+    if cov_candidate >= containment_threshold or cov_existing >= containment_threshold:
+        smaller_box, larger_box = (cand_box, exist_box) if cand_area <= exist_area else (exist_box, cand_box)
+
+        smaller_width = max(1.0, float(smaller_box[2]) - float(smaller_box[0]))
+        smaller_height = max(1.0, float(smaller_box[3]) - float(smaller_box[1]))
+        larger_height = max(1.0, float(larger_box[3]) - float(larger_box[1]))
+
+        smaller_center_x = (float(smaller_box[0]) + float(smaller_box[2])) / 2.0
+        larger_center_x = (float(larger_box[0]) + float(larger_box[2])) / 2.0
+        x_center_gap = abs(smaller_center_x - larger_center_x)
+
+        if (
+            x_center_gap <= x_alignment_ratio * smaller_width
+            and larger_height >= height_ratio_threshold * smaller_height
+        ):
+            return True
+
+    return False
+
+
+def suppress_duplicate_person_detections(
+    detections: List[Tuple[float, float, float, float, float]],
+) -> List[Tuple[float, float, float, float, float]]:
+    """Drop nested duplicate person boxes before tracking.
+
+    Some crowded scenes produce two boxes for one seated person:
+    a full-body box plus a smaller torso/upper-body box. DeepSORT then starts
+    two tracks for the same person. This filter removes the nested duplicate
+    while keeping nearby real people who only partially overlap.
+    """
+    if len(detections) < 2:
+        return detections
+
+    ordered = sorted(
+        detections,
+        key=lambda det: (float(det[4]), _bbox_area(det[:4])),
+        reverse=True,
+    )
+
+    filtered: List[Tuple[float, float, float, float, float]] = []
+    suppressed = 0
+    for detection in ordered:
+        if any(_is_nested_duplicate(detection, kept) for kept in filtered):
+            suppressed += 1
+            continue
+        filtered.append(detection)
+
+    if suppressed:
+        log.debug("Suppressed %d nested duplicate detection(s)", suppressed)
+    return filtered
 
 
 def parse_roi(roi_data: Optional[Union[str, List]]) -> Optional[List[List[float]]]:

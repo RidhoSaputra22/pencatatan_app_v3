@@ -151,4 +151,4 @@ dmypy.json
 rstp.sh
 .codex
 !frontend/public/images/logo.png
-cctv-ukip.mp4
+cctv-ukip*.mp4

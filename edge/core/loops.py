@@ -23,7 +23,7 @@ from .config import (
     TRACK_MAX_DISAPPEARED,
     TRACK_MAX_DISTANCE,
 )
-from .detection import load_model, parse_roi, point_in_roi
+from .detection import load_model, parse_roi, point_in_roi, suppress_duplicate_person_detections
 from .face_recognition import EmployeeFaceRecognizer
 from .logger import get_logger
 from .reid import cleanup_old_tracks, reset_daily_cache, update_track_embedding
@@ -216,6 +216,7 @@ def real_loop():
         detections: List[Tuple[float, float, float, float, float]] = []
         for x1, y1, x2, y2, conf, _ in raw_detections:
             detections.append((float(x1), float(y1), float(x2), float(y2), float(conf)))
+        detections = suppress_duplicate_person_detections(detections)
 
         if DEEPSORT_AVAILABLE:
             tracks = tracker.update(frame, detections)
