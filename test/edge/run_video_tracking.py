@@ -58,6 +58,10 @@ def _bootstrap_runtime(argv: Sequence[str]) -> None:
     parser.add_argument("--backend", choices=("yolov5", "ultralytics"))
     parser.add_argument("--device")
     parser.add_argument("--reid-match-threshold", type=float)
+    parser.add_argument("--reid-min-track-frames", type=int)
+    parser.add_argument("--reid-strong-match-threshold", type=float)
+    parser.add_argument("--reid-ambiguity-margin", type=float)
+    parser.add_argument("--reid-prototype-alpha", type=float)
     parser.add_argument("--with-face-recognition", action="store_true")
     args, _ = parser.parse_known_args(argv)
 
@@ -69,6 +73,14 @@ def _bootstrap_runtime(argv: Sequence[str]) -> None:
         os.environ["YOLOV5_DEVICE"] = args.device
     if args.reid_match_threshold is not None:
         os.environ["REID_MATCH_THRESHOLD"] = str(args.reid_match_threshold)
+    if args.reid_min_track_frames is not None:
+        os.environ["REID_MIN_TRACK_FRAMES"] = str(args.reid_min_track_frames)
+    if args.reid_strong_match_threshold is not None:
+        os.environ["REID_STRONG_MATCH_THRESHOLD"] = str(args.reid_strong_match_threshold)
+    if args.reid_ambiguity_margin is not None:
+        os.environ["REID_AMBIGUITY_MARGIN"] = str(args.reid_ambiguity_margin)
+    if args.reid_prototype_alpha is not None:
+        os.environ["REID_PROTOTYPE_ALPHA"] = str(args.reid_prototype_alpha)
     if not args.with_face_recognition:
         os.environ["FACE_RECOGNITION_ENABLED"] = "false"
 
@@ -93,7 +105,14 @@ import numpy as np
 from edge.core.config import CAMERA_ID, IMG_SIZE, TRACK_CONFIRM_FRAMES, TRACK_MAX_DISAPPEARED, TRACK_MAX_DISTANCE
 from edge.core.detection import load_model, parse_roi, point_in_roi, suppress_duplicate_person_detections
 from edge.core.face_recognition import EmployeeFaceRecognizer
-from edge.core.reid import cleanup_old_tracks, reset_daily_cache, update_track_embedding
+from edge.core.reid import (
+    canonicalize_visitor_key,
+    cleanup_old_tracks,
+    get_cache_stats,
+    get_reid_config,
+    reset_daily_cache,
+    update_track_identity,
+)
 from edge.core.tracker import CentroidTracker, DEEPSORT_AVAILABLE, DeepSORTTracker
 from edge.core.visualization import draw_info_overlay, draw_roi_polygon
 
@@ -105,6 +124,10 @@ TRACK_CSV_FIELDS = [
     "visitor_key",
     "visitor_key_short",
     "reid_source",
+    "reid_identity_status",
+    "reid_embedding_samples",
+    "reid_match_similarity",
+    "reid_match_margin",
     "track_backend",
     "roi_status",
     "event",
@@ -238,6 +261,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Threshold similarity untuk merge reID antar track.",
     )
     parser.add_argument(
+        "--reid-min-track-frames",
+        type=int,
+        default=int(os.getenv("REID_MIN_TRACK_FRAMES", "3")),
+        help="Jumlah frame embedding sebelum track baru boleh dikunci sebagai visitor baru.",
+    )
+    parser.add_argument(
+        "--reid-strong-match-threshold",
+        type=float,
+        default=float(os.getenv("REID_STRONG_MATCH_THRESHOLD", "0.86")),
+        help="Similarity tinggi yang boleh langsung mengikat ke visitor lama tanpa menunggu banyak frame.",
+    )
+    parser.add_argument(
+        "--reid-ambiguity-margin",
+        type=float,
+        default=float(os.getenv("REID_AMBIGUITY_MARGIN", "0.04")),
+        help="Selisih similarity minimal antara kandidat terbaik dan kandidat kedua agar match dianggap jelas.",
+    )
+    parser.add_argument(
+        "--reid-prototype-alpha",
+        type=float,
+        default=float(os.getenv("REID_PROTOTYPE_ALPHA", "0.18")),
+        help="Bobot pembaruan prototype embedding visitor harian.",
+    )
+    parser.add_argument(
         "--with-face-recognition",
         action="store_true",
         help="Aktifkan klasifikasi wajah employee jika dependency tersedia.",
@@ -323,6 +370,8 @@ def _match_detection_confidence(
 
 def _track_color(state: Dict[str, Any], in_roi: bool) -> Tuple[int, int, int]:
     person_type = state.get("person_type", "CUSTOMER")
+    if state.get("reid_identity_status") == "PENDING":
+        return (255, 255, 0)
     if person_type == "EMPLOYEE":
         return (255, 0, 0)
     if person_type == "UNKNOWN":
@@ -351,6 +400,10 @@ def _draw_test_tracks(frame: np.ndarray, tracks: Dict[int, Any], visitor_states:
             label_parts.append(str(state["roi_status"]))
         if state.get("visitor_key_short"):
             label_parts.append(f"V:{state['visitor_key_short']}")
+        if state.get("reid_identity_status") == "PENDING":
+            label_parts.append("REID:PEND")
+        elif state.get("reid_match_similarity") is not None:
+            label_parts.append(f"R:{float(state['reid_match_similarity']):.2f}")
         if state.get("person_type") == "EMPLOYEE" and state.get("employee_code"):
             label_parts.append(str(state["employee_code"]))
         label = " ".join(label_parts)
@@ -427,6 +480,38 @@ def _person_type_rank(person_type: Optional[str]) -> int:
     if value == "CUSTOMER":
         return 2
     return 1
+
+
+def _canonicalize_visitor_key_set(keys: set[str]) -> set[str]:
+    canonical_keys: set[str] = set()
+    for key in keys:
+        canonical_key = canonicalize_visitor_key(key)
+        if canonical_key:
+            canonical_keys.add(canonical_key)
+    return canonical_keys
+
+
+def _canonicalize_bucket_sets(bucket_sets: Dict[str, set[str]]) -> Dict[str, set[str]]:
+    return {
+        person_type: _canonicalize_visitor_key_set(visitor_keys)
+        for person_type, visitor_keys in bucket_sets.items()
+    }
+
+
+def _canonicalize_visitor_profiles(
+    visitor_profiles: Dict[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    canonical_profiles: Dict[str, Dict[str, Any]] = {}
+    for visitor_key, profile in visitor_profiles.items():
+        canonical_key = canonicalize_visitor_key(visitor_key)
+        if not canonical_key:
+            continue
+        existing = canonical_profiles.get(canonical_key)
+        if existing is None or _person_type_rank(profile.get("person_type")) >= _person_type_rank(
+            existing.get("person_type")
+        ):
+            canonical_profiles[canonical_key] = dict(profile)
+    return canonical_profiles
 
 
 def main() -> int:
@@ -540,6 +625,13 @@ def main() -> int:
         print(f"[info] yolo    : {active_backend} | weights={active_weights}")
         print(f"[info] reid    : threshold={os.getenv('REID_MATCH_THRESHOLD', '0.77')}")
         print(
+            "[info] reid+   : "
+            f"min_frames={os.getenv('REID_MIN_TRACK_FRAMES', '3')} | "
+            f"strong={os.getenv('REID_STRONG_MATCH_THRESHOLD', '0.86')} | "
+            f"margin={os.getenv('REID_AMBIGUITY_MARGIN', '0.04')} | "
+            f"alpha={os.getenv('REID_PROTOTYPE_ALPHA', '0.18')}"
+        )
+        print(
             f"[info] face    : "
             f"{'enabled' if face_recognizer.enabled and face_recognizer.available else 'disabled'}"
         )
@@ -592,6 +684,7 @@ def main() -> int:
                 customer_tracks = 0
                 employee_tracks = 0
                 verifying_tracks = 0
+                pending_reid_tracks = 0
                 tracks_in_roi = 0
                 frame_unique_visitors: set[str] = set()
                 frame_unique_visitors_in_roi: set[str] = set()
@@ -614,9 +707,12 @@ def main() -> int:
                         tracks_in_roi += 1
 
                     body_embedding = getattr(track, "embedding", None)
-                    visitor_key = update_track_embedding(track_id, body_embedding, CAMERA_ID, today)
+                    identity = update_track_identity(track_id, body_embedding, CAMERA_ID, today)
+                    visitor_key = identity["visitor_key"]
                     classification = face_recognizer.classify_track(frame, track_id, track.bbox)
                     person_type = _person_type_bucket(classification.get("person_type", "CUSTOMER"))
+                    if identity["identity_status"] == "PENDING":
+                        pending_reid_tracks += 1
                     frame_unique_visitors.add(visitor_key)
                     frame_unique_visitors_by_person_type[person_type].add(visitor_key)
                     if in_roi_now:
@@ -682,6 +778,11 @@ def main() -> int:
                             "employee_name": classification.get("employee_name"),
                             "match_score": classification.get("match_score"),
                             "confidence": confidence,
+                            "reid_identity_status": identity["identity_status"],
+                            "reid_source": identity["reid_source"],
+                            "reid_embedding_samples": identity["embedding_samples"],
+                            "reid_match_similarity": identity["match_similarity"],
+                            "reid_match_margin": identity["match_margin"],
                         }
                     )
 
@@ -697,7 +798,15 @@ def main() -> int:
                             "track_id": track_id,
                             "visitor_key": visitor_key,
                             "visitor_key_short": visitor_key_short,
-                            "reid_source": "embedding" if body_embedding is not None else "fallback_track_id",
+                            "reid_source": identity["reid_source"],
+                            "reid_identity_status": identity["identity_status"],
+                            "reid_embedding_samples": identity["embedding_samples"],
+                            "reid_match_similarity": (
+                                identity["match_similarity"] if identity["match_similarity"] is not None else ""
+                            ),
+                            "reid_match_margin": (
+                                identity["match_margin"] if identity["match_margin"] is not None else ""
+                            ),
                             "track_backend": tracker_backend_runtime,
                             "roi_status": roi_status,
                             "event": event,
@@ -735,6 +844,7 @@ def main() -> int:
                     f"Customer: {customer_tracks} | Employee: {employee_tracks} | Verify: {verifying_tracks}",
                     f"Unique so far: {len(seen_visitor_keys)} | Detections: {len(detections)}",
                     f"Unique now: {len(frame_unique_visitors)} | In ROI now: {len(frame_unique_visitors_in_roi)}",
+                    f"ReID stable: {max(len(tracks) - pending_reid_tracks, 0)} | Pending: {pending_reid_tracks}",
                 ]
                 draw_info_overlay(display_frame, info_lines, show_live_indicator=False)
                 writer.write(display_frame)
@@ -761,21 +871,36 @@ def main() -> int:
                     break
 
         elapsed = time.time() - start_time
+        cleanup_old_tracks([])
+        canonical_seen_visitor_keys = _canonicalize_visitor_key_set(seen_visitor_keys)
+        canonical_last_frame_unique_visitors = _canonicalize_visitor_key_set(last_frame_unique_visitors)
+        canonical_last_frame_unique_visitors_in_roi = _canonicalize_visitor_key_set(last_frame_unique_visitors_in_roi)
+        canonical_last_frame_unique_visitors_by_person_type = _canonicalize_bucket_sets(
+            last_frame_unique_visitors_by_person_type
+        )
+        canonical_unique_event_visitors = {
+            "enter_roi": _canonicalize_visitor_key_set(unique_event_visitors["enter_roi"]),
+            "exit_roi": _canonicalize_visitor_key_set(unique_event_visitors["exit_roi"]),
+        }
+        canonical_visitor_profiles = _canonicalize_visitor_profiles(visitor_profiles)
+        reid_config = get_reid_config()
+        reid_cache_stats = get_cache_stats()
+
         unique_visitors_by_person_type = {"CUSTOMER": 0, "EMPLOYEE": 0, "UNKNOWN": 0}
-        for visitor_profile in visitor_profiles.values():
+        for visitor_profile in canonical_visitor_profiles.values():
             unique_visitors_by_person_type[_person_type_bucket(visitor_profile.get("person_type"))] += 1
 
-        active_unique_visitors_last_frame = len(last_frame_unique_visitors)
-        active_unique_visitors_in_roi_last_frame = len(last_frame_unique_visitors_in_roi)
+        active_unique_visitors_last_frame = len(canonical_last_frame_unique_visitors)
+        active_unique_visitors_in_roi_last_frame = len(canonical_last_frame_unique_visitors_in_roi)
         active_unique_visitors_by_person_type_last_frame = {
             person_type: len(visitor_keys)
-            for person_type, visitor_keys in last_frame_unique_visitors_by_person_type.items()
+            for person_type, visitor_keys in canonical_last_frame_unique_visitors_by_person_type.items()
         }
         cumulative_unique_visitors_by_person_type = dict(unique_visitors_by_person_type)
         visitors_inside_roi_at_end = active_unique_visitors_in_roi_last_frame
         visitors_outside_roi_at_end = max(0, active_unique_visitors_last_frame - active_unique_visitors_in_roi_last_frame)
-        unique_visitors_entered_roi = len(unique_event_visitors["enter_roi"])
-        unique_visitors_exited_roi = len(unique_event_visitors["exit_roi"])
+        unique_visitors_entered_roi = len(canonical_unique_event_visitors["enter_roi"])
+        unique_visitors_exited_roi = len(canonical_unique_event_visitors["exit_roi"])
         repeat_entry_events = max(0, event_counts["enter_roi"] - unique_visitors_entered_roi)
         repeat_exit_events = max(0, event_counts["exit_roi"] - unique_visitors_exited_roi)
 
@@ -801,14 +926,16 @@ def main() -> int:
             "track_rows_written": csv_rows,
             "unique_visitors": peak_unique_visitors_visible,
             "unique_visitors_mode": "peak_visible",
-            "cumulative_unique_visitors": len(seen_visitor_keys),
+            "cumulative_unique_visitors": len(canonical_seen_visitor_keys),
+            "raw_cumulative_unique_visitors": len(seen_visitor_keys),
             "unique_track_ids": len(seen_track_ids),
             "visitor_summary": {
                 "total_enter_events": event_counts["enter_roi"],
                 "total_exit_events": event_counts["exit_roi"],
                 "unique_visitors_detected": peak_unique_visitors_visible,
                 "unique_visitors_detected_mode": "peak_visible",
-                "cumulative_unique_visitors_detected": len(seen_visitor_keys),
+                "cumulative_unique_visitors_detected": len(canonical_seen_visitor_keys),
+                "raw_cumulative_unique_visitors_detected": len(seen_visitor_keys),
                 "active_unique_visitors_last_frame": active_unique_visitors_last_frame,
                 "active_unique_visitors_in_roi_last_frame": active_unique_visitors_in_roi_last_frame,
                 "unique_visitors_entered_roi": unique_visitors_entered_roi,
@@ -828,6 +955,15 @@ def main() -> int:
                 "peak_unique_visitors_in_roi": peak_unique_visitors_in_roi,
                 "peak_unique_visitors_by_person_type_visible": peak_unique_visitors_by_person_type_visible,
                 "peak_unique_visitors_by_person_type_in_roi": peak_unique_visitors_by_person_type_in_roi,
+                "reid_tuning": {
+                    "match_threshold": reid_config["match_threshold"],
+                    "strong_match_threshold": reid_config["strong_match_threshold"],
+                    "ambiguity_margin": reid_config["ambiguity_margin"],
+                    "min_track_frames": int(reid_config["min_track_frames"]),
+                    "prototype_alpha": reid_config["prototype_alpha"],
+                    "alias_count": reid_cache_stats["alias_count"],
+                    "daily_visitors_in_cache": reid_cache_stats["daily_visitors"],
+                },
             },
             "roi": roi,
             "duration_seconds": round(elapsed, 3),
@@ -839,7 +975,7 @@ def main() -> int:
         print(f"[done] enter   : {event_counts['enter_roi']}")
         print(f"[done] exit    : {event_counts['exit_roi']}")
         print(f"[done] peak    : {peak_unique_visitors_visible}")
-        print(f"[done] unique  : {len(seen_visitor_keys)} cumulative")
+        print(f"[done] unique  : {len(canonical_seen_visitor_keys)} cumulative ({len(seen_visitor_keys)} raw)")
         print(f"[done] summary : {summary_path}")
         return 0
     finally:

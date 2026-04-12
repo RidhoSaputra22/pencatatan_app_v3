@@ -102,6 +102,16 @@ otomatis menonaktifkan MKLDNN untuk percobaan ulang dan fallback ke
 CentroidTracker bila DeepSORT tetap gagal. Worker tetap jalan, tetapi akurasi
 re-identification lebih rendah dibanding DeepSORT.
 
+Tuning ReID body embedding sekarang mendukung beberapa knob tambahan lewat `.env`:
+
+- `REID_MATCH_THRESHOLD`
+- `REID_MIN_TRACK_FRAMES`
+- `REID_STRONG_MATCH_THRESHOLD`
+- `REID_AMBIGUITY_MARGIN`
+- `REID_PROTOTYPE_ALPHA`
+
+Default baru menahan identity lock beberapa frame agar `visitor_key` tidak mudah pecah saat embedding awal masih noisy.
+
 ### Mode yang Tersedia
 
 Mode REAL dengan YOLOv5:

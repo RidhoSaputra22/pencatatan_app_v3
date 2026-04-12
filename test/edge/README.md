@@ -69,12 +69,23 @@ Contoh:
 
 `summary.json` sekarang juga menyimpan ringkasan agregat seperti jumlah `enter`, `exit`, visitor unik, breakdown per `person_type`, dan peak track selama video diproses.
 Field `unique_visitors` utama memakai mode `peak_visible`, sedangkan hitungan kumulatif tetap tersedia sebagai `cumulative_unique_visitors`.
+Mulai tuning ReID terbaru, runner juga menyimpan `raw_cumulative_unique_visitors` untuk membedakan jumlah key mentah vs jumlah canonical visitor setelah alias merge.
+
+Knob ReID yang bisa dituning dari CLI:
+
+- `--reid-match-threshold`
+- `--reid-min-track-frames`
+- `--reid-strong-match-threshold`
+- `--reid-ambiguity-margin`
+- `--reid-prototype-alpha`
 
 ## Kolom CSV
 
 CSV track menyimpan informasi inti per frame:
 
 - `track_id`, `visitor_key`, `visitor_key_short`
+- `reid_source`, `reid_identity_status`, `reid_embedding_samples`
+- `reid_match_similarity`, `reid_match_margin`
 - `roi_status`, `event`, `unique_status`
 - `person_type`, `employee_*`, `match_score`
 - `x1`, `y1`, `x2`, `y2`, `centroid_x`, `centroid_y`

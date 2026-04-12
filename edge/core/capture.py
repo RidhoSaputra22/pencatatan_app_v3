@@ -1,7 +1,7 @@
 """Async capture utilities that keep only the freshest camera frame."""
 import os
 import threading
-from typing import Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -64,9 +64,11 @@ class LatestFrameCapture:
         self._read_failed = False
         self._file_ended = False
         self._condition = threading.Condition()
+        self._pending_releases: List[Tuple[threading.Thread, Any]] = []
 
     def start(self) -> bool:
         """Open the source and start the reader thread."""
+        self._reap_pending_releases()
         self.release()
 
         capture = open_video_capture(self.source)
@@ -93,6 +95,7 @@ class LatestFrameCapture:
 
     def isOpened(self) -> bool:
         """Mirror the cv2.VideoCapture API used by the worker loop."""
+        self._reap_pending_releases()
         return bool(
             self._capture is not None
             and self._capture.isOpened()
@@ -114,6 +117,7 @@ class LatestFrameCapture:
         Wait for a newer frame than `last_frame_id` and return it.
         Old buffered frames are skipped automatically because only the latest one is retained.
         """
+        self._reap_pending_releases()
         with self._condition:
             self._condition.wait_for(
                 lambda: (
@@ -132,6 +136,7 @@ class LatestFrameCapture:
 
     def release(self) -> None:
         """Stop the reader thread and release the underlying capture."""
+        self._reap_pending_releases()
         capture = None
         thread = None
         with self._condition:
@@ -153,16 +158,50 @@ class LatestFrameCapture:
         # state and causes a SIGSEGV. With CAP_PROP_READ_TIMEOUT_MSEC set on network
         # sources the blocked read() returns within that window, the thread sees
         # _running=False and exits cleanly — then we can safely release the capture.
+        timed_out = False
         if thread is not None and thread.is_alive():
             thread.join(timeout=5.0)
             if thread.is_alive():
-                log.warning("Warning: reader thread did not exit in time")
+                timed_out = True
+                log.warning(
+                    "Reader thread did not exit in time; delaying capture release to avoid native crash"
+                )
+
+        if capture is not None and timed_out and thread is not None:
+            self._pending_releases.append((thread, capture))
+            return
 
         if capture is not None:
             try:
                 capture.release()
             except Exception:
                 pass
+
+    def _reap_pending_releases(self) -> None:
+        """Release old captures only after their reader threads have actually exited."""
+        if not self._pending_releases:
+            return
+
+        pending: List[Tuple[threading.Thread, Any]] = []
+        for thread, capture in self._pending_releases:
+            if thread.is_alive():
+                pending.append((thread, capture))
+                continue
+
+            try:
+                capture.release()
+            except Exception:
+                pass
+
+        if pending and len(pending) != len(self._pending_releases):
+            log.info("Released %d deferred capture(s)", len(self._pending_releases) - len(pending))
+        elif pending and len(pending) >= 3:
+            log.warning(
+                "Still waiting for %d capture reader thread(s) to exit cleanly",
+                len(pending),
+            )
+
+        self._pending_releases = pending
 
     def _reader_loop(self) -> None:
         capture = self._capture
