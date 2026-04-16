@@ -2,15 +2,45 @@
 
 import { useState } from "react";
 import { API_BASE } from "@/lib/constants";
-import { getToken } from "@/lib/utils";
-import Section from "@/components/ui/Section";
+import { formatNumber, getToken } from "@/lib/utils";
 import Button from "@/components/ui/Button";
 import Alert from "@/components/ui/Alert";
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function formatPrintDateTime() {
+  return new Intl.DateTimeFormat("id-ID", {
+    dateStyle: "full",
+    timeStyle: "medium",
+  }).format(new Date());
+}
+
+function cleanupPrintFrame(frame) {
+  if (frame?.parentNode) {
+    frame.parentNode.removeChild(frame);
+  }
+}
 
 /**
  * Export & print section with actual download and print functionality.
  */
-export default function ExportSection({ filterFrom, filterTo, day }) {
+export default function ExportSection({
+  filterFrom,
+  filterTo,
+  day,
+  totalEvents = 0,
+  uniqueVisitors = 0,
+  totalIn = 0,
+  totalOut = 0,
+  insights = {},
+}) {
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState("");
 
@@ -54,55 +84,342 @@ export default function ExportSection({ filterFrom, filterTo, day }) {
    * Print the current dashboard stats.
    */
   function handlePrint() {
-    // Create a printable version of the stats
-    const printWindow = window.open("", "_blank");
-    if (!printWindow) {
-      setError("Pop-up diblokir browser. Izinkan pop-up untuk mencetak.");
-      return;
-    }
-
-    // Get all stats data from the page
-    const statsGrid = document.querySelector("section.grid");
+    setError("");
     const statsTable = document.querySelector("table");
+    const printedAt = formatPrintDateTime();
+    const summaryCards = [
+      {
+        label: "Total Aktivitas",
+        value: formatNumber(totalEvents),
+        tone: "#2563eb",
+      },
+      {
+        label: "Pengunjung Unik",
+        value: formatNumber(uniqueVisitors),
+        tone: "#0891b2",
+      },
+      {
+        label: "Total Masuk",
+        value: formatNumber(totalIn),
+        tone: "#16a34a",
+      },
+      {
+        label: "Total Keluar",
+        value: formatNumber(totalOut),
+        tone: "#dc2626",
+      },
+    ];
 
-    printWindow.document.write(`
+    const insightItems = [
+      {
+        label: "Jam Tersibuk",
+        value: insights?.peakHour || "-",
+      },
+      {
+        label: "Kondisi Hari Ini",
+        value:
+          insights?.busyLabel && insights?.busyPercent !== null && insights?.busyPercent !== undefined
+            ? `${insights.busyLabel} (${insights.busyPercent > 0 ? "+" : ""}${insights.busyPercent}%)`
+            : "-",
+      },
+      {
+        label: "Rasio Masuk/Keluar",
+        value: insights?.ratio || "-",
+      },
+    ].filter((item) => item.value && item.value !== "-");
+
+    const printMarkup = `
       <!DOCTYPE html>
       <html>
       <head>
+        <meta charset="utf-8" />
         <title>Laporan Pengunjung Perpustakaan</title>
         <style>
-          body { font-family: Arial, sans-serif; padding: 20px; color: #333; }
-          h1 { font-size: 18px; margin-bottom: 5px; }
-          h2 { font-size: 14px; color: #666; margin-bottom: 20px; }
-          .info { font-size: 12px; color: #888; margin-bottom: 15px; }
-          .stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 20px; }
-          .stat-card { border: 1px solid #ddd; padding: 10px; border-radius: 4px; text-align: center; }
-          .stat-card .label { font-size: 11px; color: #666; }
-          .stat-card .value { font-size: 20px; font-weight: bold; margin: 5px 0; }
-          table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-          th, td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 12px; }
-          th { background: #f5f5f5; font-weight: bold; }
-          .footer { margin-top: 30px; font-size: 11px; color: #999; border-top: 1px solid #eee; padding-top: 10px; }
-          @media print { body { padding: 0; } }
+          @page {
+            size: A4 portrait;
+            margin: 14mm;
+          }
+
+          * {
+            box-sizing: border-box;
+          }
+
+          body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            color: #1f2937;
+            background: #ffffff;
+            font-size: 12px;
+            line-height: 1.45;
+          }
+
+          .report {
+            width: 100%;
+          }
+
+          .header {
+            border-bottom: 2px solid #e5e7eb;
+            padding-bottom: 14px;
+            margin-bottom: 18px;
+          }
+
+          h1 {
+            font-size: 22px;
+            margin: 0 0 6px;
+            color: #111827;
+          }
+
+          h2 {
+            font-size: 13px;
+            color: #4b5563;
+            margin: 0;
+            font-weight: 600;
+          }
+
+          .info {
+            margin-top: 8px;
+            font-size: 11px;
+            color: #6b7280;
+          }
+
+          .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+            margin: 18px 0;
+          }
+
+          .summary-card {
+            border: 1px solid #e5e7eb;
+            border-left: 4px solid var(--tone, #2563eb);
+            border-radius: 10px;
+            padding: 12px 14px;
+            background: #f9fafb;
+            page-break-inside: avoid;
+          }
+
+          .summary-label {
+            display: block;
+            font-size: 11px;
+            color: #6b7280;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            font-weight: 700;
+          }
+
+          .summary-value {
+            font-size: 24px;
+            line-height: 1.1;
+            font-weight: 700;
+            color: var(--tone, #111827);
+          }
+
+          .section-title {
+            font-size: 14px;
+            font-weight: 700;
+            color: #111827;
+            margin: 22px 0 10px;
+          }
+
+          .insights {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+            margin-bottom: 8px;
+          }
+
+          .insight-card {
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 10px 12px;
+            background: #ffffff;
+          }
+
+          .insight-label {
+            display: block;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #9ca3af;
+            margin-bottom: 4px;
+            font-weight: 700;
+          }
+
+          .insight-value {
+            font-size: 13px;
+            font-weight: 700;
+            color: #1f2937;
+          }
+
+          .table-wrap {
+            margin-top: 12px;
+          }
+
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: auto;
+          }
+
+          thead {
+            display: table-header-group;
+          }
+
+          th,
+          td {
+            border: 1px solid #d1d5db;
+            padding: 8px 10px;
+            text-align: left;
+            vertical-align: top;
+            font-size: 11px;
+          }
+
+          th {
+            background: #f3f4f6;
+            color: #111827;
+            font-weight: 700;
+          }
+
+          tbody tr:nth-child(even) {
+            background: #f9fafb;
+          }
+
+          tbody tr {
+            page-break-inside: avoid;
+          }
+
+          .empty-state {
+            border: 1px dashed #d1d5db;
+            border-radius: 10px;
+            padding: 18px;
+            color: #6b7280;
+            text-align: center;
+            background: #f9fafb;
+          }
+
+          .footer {
+            margin-top: 24px;
+            padding-top: 12px;
+            border-top: 1px solid #e5e7eb;
+            font-size: 10px;
+            color: #6b7280;
+          }
+
+          @media print {
+            body {
+              -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
+            }
+          }
         </style>
       </head>
       <body>
-        <h1>Laporan Monitoring Pengunjung Perpustakaan</h1>
-        <h2>Periode: ${fromDay} s/d ${toDay}</h2>
-        <div class="info">Dicetak pada: ${new Date().toLocaleString("id-ID")}</div>
-        ${statsGrid ? `<div>${statsGrid.outerHTML}</div>` : ""}
-        ${statsTable ? statsTable.outerHTML : "<p>Tidak ada data tabel.</p>"}
-        <div class="footer">
-          Dokumen ini dicetak dari Sistem Monitoring Pengunjung Perpustakaan
-        </div>
+        <main class="report">
+          <header class="header">
+            <h1>Laporan Monitoring Pengunjung Perpustakaan</h1>
+            <h2>Periode: ${escapeHtml(fromDay)} s/d ${escapeHtml(toDay)}</h2>
+            <div class="info">Dicetak pada: ${escapeHtml(printedAt)}</div>
+          </header>
+
+          <section>
+            <div class="summary-grid">
+              ${summaryCards
+                .map(
+                  (item) => `
+                    <article class="summary-card" style="--tone:${item.tone}">
+                      <span class="summary-label">${escapeHtml(item.label)}</span>
+                      <div class="summary-value">${escapeHtml(item.value)}</div>
+                    </article>
+                  `,
+                )
+                .join("")}
+            </div>
+          </section>
+
+          ${
+            insightItems.length > 0
+              ? `
+                <section>
+                  <div class="section-title">Ringkasan Aktivitas</div>
+                  <div class="insights">
+                    ${insightItems
+                      .map(
+                        (item) => `
+                          <article class="insight-card">
+                            <span class="insight-label">${escapeHtml(item.label)}</span>
+                            <div class="insight-value">${escapeHtml(item.value)}</div>
+                          </article>
+                        `,
+                      )
+                      .join("")}
+                  </div>
+                </section>
+              `
+              : ""
+          }
+
+          <section>
+            <div class="section-title">Statistik Per Kamera</div>
+            ${
+              statsTable
+                ? `<div class="table-wrap">${statsTable.outerHTML}</div>`
+                : `<div class="empty-state">Tidak ada data tabel untuk dicetak.</div>`
+            }
+          </section>
+
+          <div class="footer">
+            Dokumen ini dicetak dari Sistem Monitoring Pengunjung Perpustakaan.
+          </div>
+        </main>
       </body>
       </html>
-    `);
-    printWindow.document.close();
-    printWindow.focus();
-    setTimeout(() => {
-      printWindow.print();
-    }, 500);
+    `;
+
+    const existingFrame = document.getElementById("dashboard-print-frame");
+    if (existingFrame) {
+      cleanupPrintFrame(existingFrame);
+    }
+
+    const printFrame = document.createElement("iframe");
+    printFrame.id = "dashboard-print-frame";
+    printFrame.title = "Cetak laporan";
+    printFrame.setAttribute("aria-hidden", "true");
+    printFrame.style.position = "fixed";
+    printFrame.style.right = "0";
+    printFrame.style.bottom = "0";
+    printFrame.style.width = "0";
+    printFrame.style.height = "0";
+    printFrame.style.border = "0";
+    printFrame.style.opacity = "0";
+    printFrame.srcdoc = printMarkup;
+
+    printFrame.onload = () => {
+      const frameWindow = printFrame.contentWindow;
+      if (!frameWindow) {
+        setError("Gagal menyiapkan dokumen untuk dicetak.");
+        cleanupPrintFrame(printFrame);
+        return;
+      }
+
+      const handleAfterPrint = () => {
+        cleanupPrintFrame(printFrame);
+      };
+
+      frameWindow.onafterprint = handleAfterPrint;
+
+      window.setTimeout(() => {
+        try {
+          frameWindow.focus();
+          frameWindow.print();
+        } catch {
+          setError("Gagal membuka dialog cetak. Coba ulangi sekali lagi.");
+          cleanupPrintFrame(printFrame);
+        }
+      }, 250);
+    };
+
+    document.body.appendChild(printFrame);
   }
 
   return (

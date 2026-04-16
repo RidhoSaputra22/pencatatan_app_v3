@@ -17,6 +17,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_DIR = PROJECT_DIR / "test" / "edge" / "output"
 EDGE_REFERENCE_SIZE = (1280, 720)
+DEFAULT_FACE_ID_MATCH_THRESHOLD = 0.55
+DEFAULT_FACE_ID_MIN_TRACK_FRAMES = 3
+DEFAULT_FACE_ID_STRONG_MATCH_THRESHOLD = 0.65
+DEFAULT_FACE_ID_AMBIGUITY_MARGIN = 0.03
+DEFAULT_FACE_ID_PROTOTYPE_ALPHA = 0.18
 
 
 def _resolve_project_path(value: str) -> Path:
@@ -62,11 +67,25 @@ def _bootstrap_runtime(argv: Sequence[str]) -> None:
     parser.add_argument("--weights")
     parser.add_argument("--backend", choices=("yolov5", "ultralytics"))
     parser.add_argument("--device")
+    parser.add_argument("--identity-mode", choices=("reid", "face"), default="reid")
     parser.add_argument("--reid-match-threshold", type=float)
     parser.add_argument("--reid-min-track-frames", type=int)
     parser.add_argument("--reid-strong-match-threshold", type=float)
     parser.add_argument("--reid-ambiguity-margin", type=float)
     parser.add_argument("--reid-prototype-alpha", type=float)
+    parser.add_argument("--face-id-match-threshold", type=float, default=DEFAULT_FACE_ID_MATCH_THRESHOLD)
+    parser.add_argument("--face-id-min-track-frames", type=int, default=DEFAULT_FACE_ID_MIN_TRACK_FRAMES)
+    parser.add_argument(
+        "--face-id-strong-match-threshold",
+        type=float,
+        default=DEFAULT_FACE_ID_STRONG_MATCH_THRESHOLD,
+    )
+    parser.add_argument(
+        "--face-id-ambiguity-margin",
+        type=float,
+        default=DEFAULT_FACE_ID_AMBIGUITY_MARGIN,
+    )
+    parser.add_argument("--face-id-prototype-alpha", type=float, default=DEFAULT_FACE_ID_PROTOTYPE_ALPHA)
     parser.add_argument("--with-face-recognition", action="store_true")
     args, _ = parser.parse_known_args(argv)
 
@@ -86,7 +105,19 @@ def _bootstrap_runtime(argv: Sequence[str]) -> None:
         os.environ["REID_AMBIGUITY_MARGIN"] = str(args.reid_ambiguity_margin)
     if args.reid_prototype_alpha is not None:
         os.environ["REID_PROTOTYPE_ALPHA"] = str(args.reid_prototype_alpha)
-    if not args.with_face_recognition:
+    if args.identity_mode == "face":
+        os.environ["FACE_RECOGNITION_ENABLED"] = "true"
+        if args.reid_match_threshold is None:
+            os.environ["REID_MATCH_THRESHOLD"] = str(args.face_id_match_threshold)
+        if args.reid_min_track_frames is None:
+            os.environ["REID_MIN_TRACK_FRAMES"] = str(args.face_id_min_track_frames)
+        if args.reid_strong_match_threshold is None:
+            os.environ["REID_STRONG_MATCH_THRESHOLD"] = str(args.face_id_strong_match_threshold)
+        if args.reid_ambiguity_margin is None:
+            os.environ["REID_AMBIGUITY_MARGIN"] = str(args.face_id_ambiguity_margin)
+        if args.reid_prototype_alpha is None:
+            os.environ["REID_PROTOTYPE_ALPHA"] = str(args.face_id_prototype_alpha)
+    elif not args.with_face_recognition:
         os.environ["FACE_RECOGNITION_ENABLED"] = "false"
 
     configured_weights = os.getenv("YOLOV5_WEIGHTS", "").strip()
@@ -151,6 +182,10 @@ TRACK_CSV_FIELDS = [
     "confidence",
     "embedding_available",
 ]
+
+
+def _identity_embedding_source(identity_mode: str) -> str:
+    return "face_embedding" if identity_mode == "face" else "body_track_embedding"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -250,6 +285,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Threshold cosine distance DeepSORT.",
     )
     parser.add_argument(
+        "--identity-mode",
+        choices=("reid", "face"),
+        default="reid",
+        help="Sumber embedding untuk identitas pengunjung unik.",
+    )
+    parser.add_argument(
         "--backend",
         choices=("yolov5", "ultralytics"),
         default=os.getenv("YOLO_BACKEND", "yolov5"),
@@ -299,6 +340,36 @@ def build_parser() -> argparse.ArgumentParser:
         "--with-face-recognition",
         action="store_true",
         help="Aktifkan klasifikasi wajah employee jika dependency tersedia.",
+    )
+    parser.add_argument(
+        "--face-id-match-threshold",
+        type=float,
+        default=DEFAULT_FACE_ID_MATCH_THRESHOLD,
+        help="Threshold similarity untuk merge identity bila --identity-mode=face.",
+    )
+    parser.add_argument(
+        "--face-id-min-track-frames",
+        type=int,
+        default=DEFAULT_FACE_ID_MIN_TRACK_FRAMES,
+        help="Jumlah sampel embedding wajah sebelum visitor baru dikunci bila --identity-mode=face.",
+    )
+    parser.add_argument(
+        "--face-id-strong-match-threshold",
+        type=float,
+        default=DEFAULT_FACE_ID_STRONG_MATCH_THRESHOLD,
+        help="Similarity tinggi untuk fast-match bila --identity-mode=face.",
+    )
+    parser.add_argument(
+        "--face-id-ambiguity-margin",
+        type=float,
+        default=DEFAULT_FACE_ID_AMBIGUITY_MARGIN,
+        help="Margin minimal antar kandidat face match bila --identity-mode=face.",
+    )
+    parser.add_argument(
+        "--face-id-prototype-alpha",
+        type=float,
+        default=DEFAULT_FACE_ID_PROTOTYPE_ALPHA,
+        help="Bobot update prototype embedding wajah bila --identity-mode=face.",
     )
     return parser
 
@@ -585,6 +656,12 @@ def main() -> int:
         tracker, tracker_backend = _build_tracker(args)
         tracker_uses_frame_detections = isinstance(tracker, DeepSORTTracker)
         face_recognizer = EmployeeFaceRecognizer()
+        if args.identity_mode == "face" and not (face_recognizer.enabled and face_recognizer.available):
+            print(
+                "Face identity mode membutuhkan InsightFace yang aktif, tetapi runtime tidak tersedia.",
+                file=sys.stderr,
+            )
+            return 1
 
         visitor_states: Dict[int, Dict[str, Any]] = {}
         seen_visitor_keys: set[str] = set()
@@ -642,9 +719,10 @@ def main() -> int:
         print(f"[info] summary : {summary_path}")
         print(f"[info] tracker : {tracker_backend_runtime}")
         print(f"[info] yolo    : {active_backend} | weights={active_weights}")
-        print(f"[info] reid    : threshold={os.getenv('REID_MATCH_THRESHOLD', '0.77')}")
+        print(f"[info] id mode : {args.identity_mode} | source={_identity_embedding_source(args.identity_mode)}")
+        print(f"[info] id th   : threshold={os.getenv('REID_MATCH_THRESHOLD', '0.77')}")
         print(
-            "[info] reid+   : "
+            "[info] id tune : "
             f"min_frames={os.getenv('REID_MIN_TRACK_FRAMES', '3')} | "
             f"strong={os.getenv('REID_STRONG_MATCH_THRESHOLD', '0.86')} | "
             f"margin={os.getenv('REID_AMBIGUITY_MARGIN', '0.04')} | "
@@ -730,8 +808,12 @@ def main() -> int:
                     if in_roi_now:
                         tracks_in_roi += 1
 
-                    body_embedding = getattr(track, "embedding", None)
-                    identity = update_track_identity(track_id, body_embedding, CAMERA_ID, today)
+                    if args.identity_mode == "face":
+                        identity_embedding = face_recognizer.extract_track_face_embedding(track.bbox)
+                    else:
+                        identity_embedding = getattr(track, "embedding", None)
+
+                    identity = update_track_identity(track_id, identity_embedding, CAMERA_ID, today)
                     visitor_key = identity["visitor_key"]
                     classification = face_recognizer.classify_track(frame, track_id, track.bbox)
                     person_type = _person_type_bucket(classification.get("person_type", "CUSTOMER"))
@@ -851,7 +933,7 @@ def main() -> int:
                             "centroid_x": round(float(track.centroid[0]), 2),
                             "centroid_y": round(float(track.centroid[1]), 2),
                             "confidence": confidence,
-                            "embedding_available": bool(body_embedding is not None),
+                            "embedding_available": bool(identity_embedding is not None),
                         }
                     )
                     csv_rows += 1
@@ -868,7 +950,8 @@ def main() -> int:
                     f"Customer: {customer_tracks} | Employee: {employee_tracks} | Verify: {verifying_tracks}",
                     f"Unique so far: {len(seen_visitor_keys)} | Detections: {len(detections)}",
                     f"Unique now: {len(frame_unique_visitors)} | In ROI now: {len(frame_unique_visitors_in_roi)}",
-                    f"ReID stable: {max(len(tracks) - pending_reid_tracks, 0)} | Pending: {pending_reid_tracks}",
+                    f"{'FaceID' if args.identity_mode == 'face' else 'ReID'} stable: "
+                    f"{max(len(tracks) - pending_reid_tracks, 0)} | Pending: {pending_reid_tracks}",
                 ]
                 draw_info_overlay(display_frame, info_lines, show_live_indicator=False)
                 writer.write(display_frame)
@@ -937,6 +1020,9 @@ def main() -> int:
             "output_summary": str(summary_path),
             "output_stem": output_stem,
             "tracker_backend": tracker_backend_runtime,
+            "identity_mode": args.identity_mode,
+            "identity_embedding_source": _identity_embedding_source(args.identity_mode),
+            "identity_match_threshold": float(os.getenv("REID_MATCH_THRESHOLD", "0.77")),
             "yolo_backend": active_backend,
             "weights": active_weights,
             "reid_match_threshold": float(os.getenv("REID_MATCH_THRESHOLD", "0.77")),
@@ -983,6 +1069,17 @@ def main() -> int:
                 "peak_unique_visitors_in_roi": peak_unique_visitors_in_roi,
                 "peak_unique_visitors_by_person_type_visible": peak_unique_visitors_by_person_type_visible,
                 "peak_unique_visitors_by_person_type_in_roi": peak_unique_visitors_by_person_type_in_roi,
+                "identity_tuning": {
+                    "identity_mode": args.identity_mode,
+                    "embedding_source": _identity_embedding_source(args.identity_mode),
+                    "match_threshold": reid_config["match_threshold"],
+                    "strong_match_threshold": reid_config["strong_match_threshold"],
+                    "ambiguity_margin": reid_config["ambiguity_margin"],
+                    "min_track_frames": int(reid_config["min_track_frames"]),
+                    "prototype_alpha": reid_config["prototype_alpha"],
+                    "alias_count": reid_cache_stats["alias_count"],
+                    "daily_visitors_in_cache": reid_cache_stats["daily_visitors"],
+                },
                 "reid_tuning": {
                     "match_threshold": reid_config["match_threshold"],
                     "strong_match_threshold": reid_config["strong_match_threshold"],

@@ -15,8 +15,7 @@ import Alert from "@/components/ui/Alert";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import { formatNumber } from "@/lib/utils";
-import { IS_DEV_ENV, ROLE_ADMIN } from "@/lib/constants";
-import { resetDailyStats } from "@/services/stats.service";
+import { APP_ENV, ROLE_ADMIN } from "@/lib/constants";
 import CountUp from "react-countup";
 import { useMemo, useState } from "react";
 
@@ -112,7 +111,7 @@ export default function DashboardPage() {
     };
   }, [daily]);
 
-  const showDevResetTools = IS_DEV_ENV && user?.role === ROLE_ADMIN;
+  const showDevResetTools = APP_ENV.trim().toLowerCase() === "dev" && user?.role === ROLE_ADMIN;
   const resetTargetDay = useMemo(() => {
     if (filterFrom && filterTo && filterFrom === filterTo) {
       return filterFrom;
@@ -121,7 +120,7 @@ export default function DashboardPage() {
   }, [filterFrom, filterTo]);
 
   async function handleResetDaily() {
-    if (!resetTargetDay || isResettingDaily) {
+    if (!showDevResetTools || !resetTargetDay || isResettingDaily) {
       return;
     }
 
@@ -134,6 +133,7 @@ export default function DashboardPage() {
 
     setIsResettingDaily(true);
     try {
+      const { resetDailyStats } = await import("@/services/stats.service");
       const result = await resetDailyStats(resetTargetDay);
       await reload();
       const deleted = result?.deleted || {};
@@ -490,7 +490,16 @@ export default function DashboardPage() {
       <StatsTable daily={daily} />
 
       {/* ===== EXPORT ===== */}
-      <ExportSection filterFrom={filterFrom} filterTo={filterTo} day={day} />
+      <ExportSection
+        filterFrom={filterFrom}
+        filterTo={filterTo}
+        day={day}
+        totalEvents={totalEvents}
+        uniqueVisitors={uniqueVisitors}
+        totalIn={totalIn}
+        totalOut={totalOut}
+        insights={insights}
+      />
     </div>
   );
 }

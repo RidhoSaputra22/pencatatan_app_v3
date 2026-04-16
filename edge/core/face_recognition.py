@@ -239,6 +239,12 @@ class EmployeeFaceRecognizer:
 
         return self._serialize(state)
 
+    def extract_track_face_embedding(self, bbox) -> Optional[np.ndarray]:
+        """Return the normalized face embedding matched to a track bbox, if any."""
+        if not self.enabled or not self.available:
+            return None
+        return self._extract_face_embedding(None, bbox)
+
     def _serialize(self, state: TrackClassification) -> Dict[str, Any]:
         return {
             "person_type": state.person_type,
@@ -251,7 +257,7 @@ class EmployeeFaceRecognizer:
             "stable": state.stable,
         }
 
-    def _extract_face_embedding(self, frame: np.ndarray, bbox) -> Optional[np.ndarray]:
+    def _extract_face_embedding(self, frame: Optional[np.ndarray], bbox) -> Optional[np.ndarray]:
         """Match a pre-detected face from batch cache to the given track bbox using IoU."""
         if self._frame_faces is None or len(self._frame_faces) == 0:
             return None
