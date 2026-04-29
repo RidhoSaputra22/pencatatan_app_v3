@@ -153,6 +153,4 @@ rstp.sh
 .codex
 !frontend/public/images/logo.png
 cctv-ukip*.mp4
-test/*
-train/*
-
+yolo_lab/*

@@ -10,6 +10,7 @@ Arsitektur:
 import asyncio
 import contextlib
 import json
+from pathlib import Path
 import threading
 import time
 from collections import deque
@@ -24,7 +25,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from .config import (
+    CONF_TH,
+    DEVICE,
+    DUPLICATE_CONTAINMENT_THRESHOLD,
     EDGE_PROCESSING_MAX_FPS,
+    EDGE_EMPLOYEE_FACES_DIR,
     EDGE_STREAM_ALLOW_ORIGIN,
     EDGE_STREAM_HOST,
     EDGE_STREAM_JPEG_QUALITY,
@@ -33,6 +38,42 @@ from .config import (
     EDGE_STREAM_URL,
     EDGE_WEBRTC_ENABLED,
     EDGE_WEBRTC_ICE_SERVERS,
+    EMPLOYEE_MATCH_THRESHOLD,
+    FACE_ID_AMBIGUITY_MARGIN,
+    FACE_ID_MATCH_THRESHOLD,
+    FACE_ID_MIN_TRACK_FRAMES,
+    FACE_ID_PROTOTYPE_ALPHA,
+    FACE_ID_STRONG_MATCH_THRESHOLD,
+    FACE_RECOGNITION_ENABLED,
+    FACE_REGISTRY_SOURCE,
+    FORCE_CENTROID,
+    IDENTITY_MODE,
+    IMG_SIZE,
+    IOU_TH,
+    REID_AMBIGUITY_MARGIN,
+    REID_MATCH_THRESHOLD,
+    REID_MIN_TRACK_FRAMES,
+    REID_PROTOTYPE_ALPHA,
+    REID_STRONG_MATCH_THRESHOLD,
+    SUPPRESS_NESTED_DUPLICATES,
+    TEST_FRAME_HEIGHT,
+    TEST_FRAME_STEP,
+    TEST_FRAME_WIDTH,
+    TEST_INPUT,
+    TEST_KEEP_SOURCE_SIZE,
+    TEST_MAX_FRAMES,
+    TEST_MAX_SECONDS,
+    TEST_MODE,
+    TEST_OUTPUT_DIR,
+    TEST_OUTPUT_FPS,
+    TEST_OUTPUT_NAME,
+    TEST_ROI_JSON,
+    TRACK_CONFIRM_FRAMES,
+    TRACK_MAX_COSINE_DISTANCE,
+    TRACK_MAX_DISAPPEARED,
+    TRACK_MAX_DISTANCE,
+    WEIGHTS,
+    YOLO_BACKEND,
 )
 from .logger import get_logger
 
@@ -448,7 +489,7 @@ def health():
 
     return {
         "status": "ok" if has_frame else "waiting",
-        "camera_source": EDGE_STREAM_URL or "not configured",
+        "camera_source": TEST_INPUT or EDGE_STREAM_URL or "not configured",
         "has_frame": has_frame,
         "frame_age_ms": age_ms,
         "frame_count": frame_count,
@@ -467,6 +508,51 @@ def health():
         "webrtc_ice_source": _ice_server_source,
         "webrtc_viewers": _webrtc_viewers,
         "webrtc_disabled_reason": _webrtc_disabled_reason() or None,
+        "video_test_profile": {
+            "enabled": TEST_MODE == "video" and bool(TEST_INPUT) and Path(TEST_INPUT).exists(),
+            "mode": TEST_MODE or "realtime",
+            "input": TEST_INPUT or None,
+            "input_exists": bool(TEST_INPUT) and Path(TEST_INPUT).exists(),
+            "output_dir": TEST_OUTPUT_DIR,
+            "output_name": TEST_OUTPUT_NAME or None,
+            "roi_json": TEST_ROI_JSON or None,
+            "frame_width": TEST_FRAME_WIDTH,
+            "frame_height": TEST_FRAME_HEIGHT,
+            "keep_source_size": TEST_KEEP_SOURCE_SIZE,
+            "max_frames": TEST_MAX_FRAMES,
+            "max_seconds": TEST_MAX_SECONDS,
+            "frame_step": TEST_FRAME_STEP,
+            "output_fps": TEST_OUTPUT_FPS,
+            "img_size": IMG_SIZE,
+            "yolo_conf": CONF_TH,
+            "yolo_iou": IOU_TH,
+            "suppress_nested_duplicates": SUPPRESS_NESTED_DUPLICATES,
+            "duplicate_containment_threshold": DUPLICATE_CONTAINMENT_THRESHOLD,
+            "identity_mode": IDENTITY_MODE,
+            "backend": YOLO_BACKEND,
+            "weights": WEIGHTS,
+            "weights_exists": bool(WEIGHTS) and Path(WEIGHTS).exists(),
+            "device": DEVICE,
+            "force_centroid": FORCE_CENTROID,
+            "max_age": TRACK_MAX_DISAPPEARED,
+            "n_init": TRACK_CONFIRM_FRAMES,
+            "max_distance": TRACK_MAX_DISTANCE,
+            "max_cosine_distance": TRACK_MAX_COSINE_DISTANCE,
+            "face_registry_source": FACE_REGISTRY_SOURCE,
+            "employee_faces_dir": EDGE_EMPLOYEE_FACES_DIR,
+            "employee_match_threshold": EMPLOYEE_MATCH_THRESHOLD,
+            "reid_match_threshold": REID_MATCH_THRESHOLD,
+            "reid_min_track_frames": REID_MIN_TRACK_FRAMES,
+            "reid_strong_match_threshold": REID_STRONG_MATCH_THRESHOLD,
+            "reid_ambiguity_margin": REID_AMBIGUITY_MARGIN,
+            "reid_prototype_alpha": REID_PROTOTYPE_ALPHA,
+            "with_face_recognition": FACE_RECOGNITION_ENABLED,
+            "face_id_match_threshold": FACE_ID_MATCH_THRESHOLD,
+            "face_id_min_track_frames": FACE_ID_MIN_TRACK_FRAMES,
+            "face_id_strong_match_threshold": FACE_ID_STRONG_MATCH_THRESHOLD,
+            "face_id_ambiguity_margin": FACE_ID_AMBIGUITY_MARGIN,
+            "face_id_prototype_alpha": FACE_ID_PROTOTYPE_ALPHA,
+        },
     }
 
 

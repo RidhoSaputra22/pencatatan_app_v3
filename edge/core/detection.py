@@ -5,7 +5,16 @@ from typing import Optional, List, Union, Tuple
 import numpy as np
 import cv2
 
-from .config import CONF_TH, IOU_TH, DEVICE, WEIGHTS, REPO, YOLO_BACKEND
+from .config import (
+    CONF_TH,
+    DEVICE,
+    DUPLICATE_CONTAINMENT_THRESHOLD,
+    IOU_TH,
+    REPO,
+    SUPPRESS_NESTED_DUPLICATES,
+    WEIGHTS,
+    YOLO_BACKEND,
+)
 from .logger import get_logger
 
 log = get_logger("detection")
@@ -242,6 +251,8 @@ def _is_nested_duplicate(
 
 def suppress_duplicate_person_detections(
     detections: List[Tuple[float, float, float, float, float]],
+    enabled: bool = SUPPRESS_NESTED_DUPLICATES,
+    containment_threshold: float = DUPLICATE_CONTAINMENT_THRESHOLD,
 ) -> List[Tuple[float, float, float, float, float]]:
     """Drop nested duplicate person boxes before tracking.
 
@@ -250,7 +261,7 @@ def suppress_duplicate_person_detections(
     two tracks for the same person. This filter removes the nested duplicate
     while keeping nearby real people who only partially overlap.
     """
-    if len(detections) < 2:
+    if not enabled or len(detections) < 2:
         return detections
 
     ordered = sorted(
@@ -262,7 +273,14 @@ def suppress_duplicate_person_detections(
     filtered: List[Tuple[float, float, float, float, float]] = []
     suppressed = 0
     for detection in ordered:
-        if any(_is_nested_duplicate(detection, kept) for kept in filtered):
+        if any(
+            _is_nested_duplicate(
+                detection,
+                kept,
+                containment_threshold=containment_threshold,
+            )
+            for kept in filtered
+        ):
             suppressed += 1
             continue
         filtered.append(detection)

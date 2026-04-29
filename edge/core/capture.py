@@ -72,6 +72,8 @@ class LatestFrameCapture:
         self._running = False
         self._read_failed = False
         self._file_ended = False
+        self._source_fps = 0.0
+        self._source_size = (0, 0)
         self._condition = threading.Condition()
         self._pending_releases: List[Tuple[threading.Thread, Any]] = []
 
@@ -94,6 +96,11 @@ class LatestFrameCapture:
         self._running = True
         self._read_failed = False
         self._file_ended = False
+        self._source_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+        self._source_size = (
+            int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0),
+            int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0),
+        )
         self._thread = threading.Thread(
             target=self._reader_loop,
             name="latest-frame-capture",
@@ -116,6 +123,16 @@ class LatestFrameCapture:
     def file_ended(self) -> bool:
         """Return True if a video file reached the end."""
         return self._file_ended
+
+    @property
+    def source_fps(self) -> float:
+        """Return the source FPS reported by OpenCV, when available."""
+        return self._source_fps
+
+    @property
+    def source_size(self) -> Tuple[int, int]:
+        """Return the source width and height reported by OpenCV."""
+        return self._source_size
 
     def read(
         self,
@@ -159,6 +176,8 @@ class LatestFrameCapture:
             self._frame = None
             self._read_failed = False
             self._file_ended = False
+            self._source_fps = 0.0
+            self._source_size = (0, 0)
             self._condition.notify_all()
 
         # Join the reader thread BEFORE releasing the capture.

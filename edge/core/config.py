@@ -1,6 +1,8 @@
-"""Configuration management for edge worker"""
+"""Configuration management for the edge worker and video test profile."""
 import os
 from pathlib import Path
+from typing import Iterable, Optional
+
 from dotenv import load_dotenv
 
 # Load .env file from parent directory
@@ -16,9 +18,25 @@ def resolve_project_path(value: str) -> str:
     return str(path.resolve())
 
 
+def _first_env_value(names: Iterable[str]) -> Optional[str]:
+    for name in names:
+        raw = os.getenv(name)
+        if raw is not None and raw.strip():
+            return raw.strip()
+    return None
+
+
 def env(name: str, default: str = "") -> str:
-    """Get environment variable with default value"""
+    """Get environment variable with default value."""
     return os.getenv(name, default)
+
+
+def env_alias(names: Iterable[str], default: str = "") -> str:
+    """Get the first non-empty value from an ordered list of env names."""
+    raw = _first_env_value(names)
+    if raw is None:
+        return default
+    return raw
 
 
 def env_required(name: str) -> str:
@@ -29,6 +47,15 @@ def env_required(name: str) -> str:
     return raw.strip()
 
 
+def env_required_alias(names: Iterable[str]) -> str:
+    """Get a required env value from multiple candidate names."""
+    raw = _first_env_value(names)
+    if raw is None:
+        joined = ", ".join(names)
+        raise RuntimeError(f"Missing required environment variable. Expected one of: {joined}")
+    return raw
+
+
 def env_int(name: str, default: int) -> int:
     """Parse integer environment variables safely."""
     raw = os.getenv(name)
@@ -36,6 +63,17 @@ def env_int(name: str, default: int) -> int:
         return default
     try:
         return int(raw.strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def env_int_alias(names: Iterable[str], default: int) -> int:
+    """Parse the first available integer env value from aliases."""
+    raw = _first_env_value(names)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
     except (TypeError, ValueError):
         return default
 
@@ -60,6 +98,17 @@ def env_float(name: str, default: float) -> float:
         return default
 
 
+def env_float_alias(names: Iterable[str], default: float) -> float:
+    """Parse the first available float env value from aliases."""
+    raw = _first_env_value(names)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def env_float_required(name: str) -> float:
     """Parse a required float environment variable."""
     raw = env_required(name)
@@ -77,13 +126,54 @@ def env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def env_bool_alias(names: Iterable[str], default: bool = False) -> bool:
+    """Parse the first available bool-like env value from aliases."""
+    raw = _first_env_value(names)
+    if raw is None:
+        return default
+    return raw.lower() in {"1", "true", "yes", "on"}
+
+
 def env_bool_required(name: str) -> bool:
     """Parse a required bool-like environment variable."""
     return env_required(name).lower() in {"1", "true", "yes", "on"}
 
 
+def _optional_project_path(value: str) -> str:
+    raw = (value or "").strip()
+    return resolve_project_path(raw) if raw else ""
+
+
+def _resolved_existing_path(preferred: str, fallback: str = "") -> str:
+    preferred_path = Path(resolve_project_path(preferred))
+    if preferred_path.exists():
+        return str(preferred_path)
+
+    fallback_raw = (fallback or "").strip()
+    if fallback_raw:
+        fallback_path = Path(resolve_project_path(fallback_raw))
+        if fallback_path.exists():
+            return str(fallback_path)
+
+    return str(preferred_path)
+
+
 # App environment — controls log verbosity (dev=DEBUG, else INFO)
 APP_ENV = env("APP_ENV", "production").strip().lower()
+
+# Compatibility profile for offline video testing.
+TEST_MODE = env_alias(("TEST_MODE", "EDGE_TEST_MODE"), "").strip().lower()
+TEST_INPUT = _optional_project_path(env_alias(("TEST_INPUT", "EDGE_TEST_INPUT"), ""))
+TEST_OUTPUT_DIR = resolve_project_path(env_alias(("TEST_OUTPUT_DIR", "EDGE_TEST_OUTPUT_DIR"), "test/output"))
+TEST_OUTPUT_NAME = env_alias(("TEST_OUTPUT_NAME", "EDGE_TEST_OUTPUT_NAME"), "").strip()
+TEST_ROI_JSON = env_alias(("TEST_ROI_JSON", "EDGE_TEST_ROI_JSON"), "").strip()
+TEST_FRAME_WIDTH = max(1, env_int_alias(("TEST_FRAME_WIDTH", "EDGE_TEST_FRAME_WIDTH"), 1280))
+TEST_FRAME_HEIGHT = max(1, env_int_alias(("TEST_FRAME_HEIGHT", "EDGE_TEST_FRAME_HEIGHT"), 720))
+TEST_KEEP_SOURCE_SIZE = env_bool_alias(("TEST_KEEP_SOURCE_SIZE", "EDGE_TEST_KEEP_SOURCE_SIZE"), False)
+TEST_MAX_FRAMES = max(0, env_int_alias(("TEST_MAX_FRAMES", "EDGE_TEST_MAX_FRAMES"), 0))
+TEST_MAX_SECONDS = max(0.0, env_float_alias(("TEST_MAX_SECONDS", "EDGE_TEST_MAX_SECONDS"), 0.0))
+TEST_FRAME_STEP = max(1, env_int_alias(("TEST_FRAME_STEP", "EDGE_TEST_FRAME_STEP"), 1))
+TEST_OUTPUT_FPS = max(0.0, env_float_alias(("TEST_OUTPUT_FPS", "EDGE_TEST_OUTPUT_FPS"), 0.0))
 
 # Mode configuration
 MODE = env_required("EDGE_MODE").lower()
@@ -112,30 +202,60 @@ EDGE_CAPTURE_FFMPEG_OPTIONS = env(
 
 # YOLO configuration
 # YOLO_BACKEND: "yolov5" (torch.hub) | "ultralytics" (YOLOv8/v9/v10/v11 via ultralytics package)
-YOLO_BACKEND = env("YOLO_BACKEND", "yolov5").strip().lower()
-CONF_TH = env_float_required("YOLOV5_CONF")
-IOU_TH = env_float_required("YOLOV5_IOU")
-IMG_SIZE = env_int_required("YOLOV5_IMG_SIZE")
+YOLO_BACKEND = env_alias(("YOLO_BACKEND", "BACKEND"), "yolov5").strip().lower()
+CONF_TH = env_float_alias(("YOLO_CONF", "YOLOV5_CONF"), 0.45)
+IOU_TH = env_float_alias(("YOLO_IOU", "YOLOV5_IOU"), 0.45)
+IMG_SIZE = max(32, env_int_alias(("YOLO_IMG_SIZE", "YOLOV5_IMG_SIZE"), 640))
 # Device: "cpu", "cuda", "xpu" (Intel GPU), or "auto" (auto-detect)
-DEVICE = env_required("YOLOV5_DEVICE")
-WEIGHTS = resolve_project_path(env_required("YOLOV5_WEIGHTS"))
-REPO = resolve_project_path(env("YOLOV5_REPO", "").strip()) if env("YOLOV5_REPO", "").strip() else ""
+DEVICE = env_alias(("YOLO_DEVICE", "YOLOV5_DEVICE"), "auto").strip() or "auto"
+WEIGHTS = _resolved_existing_path(
+    env_required_alias(("YOLO_WEIGHTS", "YOLOV5_WEIGHTS")),
+    env("YOLOV5_WEIGHTS", ""),
+)
+REPO_RAW = env_alias(("YOLO_REPO", "YOLOV5_REPO"), "").strip()
+REPO = resolve_project_path(REPO_RAW) if REPO_RAW else ""
+
+# Duplicate suppression before tracking.
+SUPPRESS_NESTED_DUPLICATES = env_bool_alias(("SUPPRESS_NESTED_DUPLICATES",), True)
+DUPLICATE_CONTAINMENT_THRESHOLD = min(
+    1.0,
+    max(0.0, env_float_alias(("DUPLICATE_CONTAINMENT_THRESHOLD",), 0.9)),
+)
 
 # Tracking configuration
-TRACK_MAX_DISAPPEARED = env_int_required("TRACK_MAX_DISAPPEARED")
-TRACK_MAX_DISTANCE = env_float_required("TRACK_MAX_DISTANCE")
-TRACK_CONFIRM_FRAMES = max(1, env_int_required("TRACK_CONFIRM_FRAMES"))
-REID_MATCH_THRESHOLD = env_float("REID_MATCH_THRESHOLD", 0.77)
-REID_MIN_TRACK_FRAMES = max(1, env_int("REID_MIN_TRACK_FRAMES", 3))
+FORCE_CENTROID = env_bool_alias(("FORCE_CENTROID",), False)
+TRACK_MAX_DISAPPEARED = max(0, env_int_alias(("TRACK_MAX_AGE", "TRACK_MAX_DISAPPEARED"), 30))
+TRACK_MAX_DISTANCE = max(0.0, env_float_alias(("TRACK_MAX_DISTANCE",), 80.0))
+TRACK_CONFIRM_FRAMES = max(1, env_int_alias(("TRACK_N_INIT", "TRACK_CONFIRM_FRAMES"), 3))
+TRACK_MAX_COSINE_DISTANCE = max(0.0, env_float_alias(("TRACK_MAX_COSINE_DISTANCE",), 0.3))
+IDENTITY_MODE = env_alias(("IDENTITY_MODE",), "reid").strip().lower() or "reid"
+FACE_ID_MATCH_THRESHOLD = env_float_alias(("FACE_ID_MATCH_THRESHOLD",), 0.55)
+FACE_ID_MIN_TRACK_FRAMES = max(1, env_int_alias(("FACE_ID_MIN_TRACK_FRAMES",), 3))
+FACE_ID_STRONG_MATCH_THRESHOLD = env_float_alias(("FACE_ID_STRONG_MATCH_THRESHOLD",), 0.65)
+FACE_ID_AMBIGUITY_MARGIN = max(0.0, env_float_alias(("FACE_ID_AMBIGUITY_MARGIN",), 0.03))
+FACE_ID_PROTOTYPE_ALPHA = min(1.0, max(0.01, env_float_alias(("FACE_ID_PROTOTYPE_ALPHA",), 0.18)))
+
+reid_default_match_threshold = FACE_ID_MATCH_THRESHOLD if IDENTITY_MODE == "face" else 0.77
+reid_default_min_track_frames = FACE_ID_MIN_TRACK_FRAMES if IDENTITY_MODE == "face" else 3
+reid_default_strong_match_threshold = FACE_ID_STRONG_MATCH_THRESHOLD if IDENTITY_MODE == "face" else 0.86
+reid_default_ambiguity_margin = FACE_ID_AMBIGUITY_MARGIN if IDENTITY_MODE == "face" else 0.04
+reid_default_prototype_alpha = FACE_ID_PROTOTYPE_ALPHA if IDENTITY_MODE == "face" else 0.18
+
+REID_MATCH_THRESHOLD = env_float("REID_MATCH_THRESHOLD", reid_default_match_threshold)
+REID_MIN_TRACK_FRAMES = max(1, env_int("REID_MIN_TRACK_FRAMES", reid_default_min_track_frames))
 REID_STRONG_MATCH_THRESHOLD = env_float(
     "REID_STRONG_MATCH_THRESHOLD",
-    max(REID_MATCH_THRESHOLD + 0.06, 0.86),
+    max(REID_MATCH_THRESHOLD + 0.06, reid_default_strong_match_threshold),
 )
-REID_AMBIGUITY_MARGIN = max(0.0, env_float("REID_AMBIGUITY_MARGIN", 0.04))
-REID_PROTOTYPE_ALPHA = min(1.0, max(0.01, env_float("REID_PROTOTYPE_ALPHA", 0.18)))
+REID_AMBIGUITY_MARGIN = max(0.0, env_float("REID_AMBIGUITY_MARGIN", reid_default_ambiguity_margin))
+REID_PROTOTYPE_ALPHA = min(1.0, max(0.01, env_float("REID_PROTOTYPE_ALPHA", reid_default_prototype_alpha)))
 
 # Face recognition configuration
-FACE_RECOGNITION_ENABLED = env_bool_required("FACE_RECOGNITION_ENABLED")
+FACE_RECOGNITION_ENABLED = env_bool_alias(("WITH_FACE_RECOGNITION", "FACE_RECOGNITION_ENABLED"), False)
+FACE_REGISTRY_SOURCE = env_alias(("FACE_REGISTRY_SOURCE",), "backend").strip().lower() or "backend"
+EDGE_EMPLOYEE_FACES_DIR = resolve_project_path(
+    env_alias(("EDGE_EMPLOYEE_FACES_DIR", "EMPLOYEE_FACES_DIR"), "./backend/storage/employee_faces")
+)
 INSIGHTFACE_MODEL_NAME = env_required("INSIGHTFACE_MODEL_NAME")
 INSIGHTFACE_DET_SIZE = env_int_required("INSIGHTFACE_DET_SIZE")
 INSIGHTFACE_PROVIDERS = [
@@ -143,10 +263,10 @@ INSIGHTFACE_PROVIDERS = [
     for provider in env_required("INSIGHTFACE_PROVIDERS").split(",")
     if provider.strip()
 ]
-EMPLOYEE_MATCH_THRESHOLD = env_float_required("EMPLOYEE_MATCH_THRESHOLD")
-EMPLOYEE_REGISTRY_REFRESH_SECONDS = env_int_required("EMPLOYEE_REGISTRY_REFRESH_SECONDS")
-FACE_RECHECK_SECONDS = env_float_required("FACE_RECHECK_SECONDS")
-FACE_UNKNOWN_TIMEOUT = env_float_required("FACE_UNKNOWN_TIMEOUT")
+EMPLOYEE_MATCH_THRESHOLD = env_float("EMPLOYEE_MATCH_THRESHOLD", 0.45)
+EMPLOYEE_REGISTRY_REFRESH_SECONDS = env_int("EMPLOYEE_REGISTRY_REFRESH_SECONDS", 60)
+FACE_RECHECK_SECONDS = env_float("FACE_RECHECK_SECONDS", 0.8)
+FACE_UNKNOWN_TIMEOUT = env_float("FACE_UNKNOWN_TIMEOUT", 2.5)
 FACE_DETECTION_FRAME_INTERVAL = max(1, env_int("FACE_DETECTION_FRAME_INTERVAL", 3))
 
 # Backend API configuration

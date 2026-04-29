@@ -1,12 +1,16 @@
 """Employee face recognition utilities for the edge worker."""
 from dataclasses import dataclass
+from pathlib import Path
 import time
 from typing import Any, Dict, List, Optional
 
+import cv2
 import numpy as np
 
 from .config import (
+    EDGE_EMPLOYEE_FACES_DIR,
     FACE_RECOGNITION_ENABLED,
+    FACE_REGISTRY_SOURCE,
     INSIGHTFACE_DET_SIZE,
     INSIGHTFACE_MODEL_NAME,
     INSIGHTFACE_PROVIDERS,
@@ -99,33 +103,16 @@ class EmployeeFaceRecognizer:
         if not force and now - self._last_registry_refresh < EMPLOYEE_REGISTRY_REFRESH_SECONDS:
             return
 
-        payload = fetch_fn(token)
-        items = payload.get("items", []) if isinstance(payload, dict) else []
-        registry: List[Dict[str, Any]] = []
-        for item in items:
-            embedding = item.get("face_embedding")
-            if not embedding:
-                continue
-            emb = _normalize_embedding(np.asarray(embedding, dtype=np.float32))
-            registry.append(
-                {
-                    "employee_id": item.get("employee_id"),
-                    "employee_code": item.get("employee_code"),
-                    "employee_name": item.get("full_name"),
-                    "embedding": emb,
-                }
-            )
-
-        self._employee_registry = registry
-        # Pre-build matrix for vectorized matching
-        if registry:
-            self._employee_matrix = np.stack(
-                [emp["embedding"] for emp in registry], axis=0
-            )
+        if FACE_REGISTRY_SOURCE == "folder":
+            registry = self._load_registry_from_folder()
         else:
-            self._employee_matrix = None
+            payload = fetch_fn(token)
+            items = payload.get("items", []) if isinstance(payload, dict) else []
+            registry = self._normalize_registry_items(items)
+
+        self._set_registry(registry)
         self._last_registry_refresh = now
-        log.info("Loaded %d employee face embeddings", len(registry))
+        log.info("Loaded %d employee face embeddings from %s", len(registry), FACE_REGISTRY_SOURCE)
 
     def reset_daily(self) -> None:
         """Reset active track classifications on date rollover."""
@@ -315,3 +302,86 @@ class EmployeeFaceRecognizer:
             "employee_name": best["employee_name"],
             "score": float(scores[max_idx]),
         }
+
+    def _normalize_registry_items(self, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        registry: List[Dict[str, Any]] = []
+        for item in items:
+            embedding = item.get("face_embedding")
+            if not embedding:
+                continue
+            emb = _normalize_embedding(np.asarray(embedding, dtype=np.float32))
+            registry.append(
+                {
+                    "employee_id": item.get("employee_id"),
+                    "employee_code": item.get("employee_code"),
+                    "employee_name": item.get("full_name"),
+                    "embedding": emb,
+                }
+            )
+        return registry
+
+    def _set_registry(self, registry: List[Dict[str, Any]]) -> None:
+        self._employee_registry = registry
+        if registry:
+            self._employee_matrix = np.stack([emp["embedding"] for emp in registry], axis=0)
+        else:
+            self._employee_matrix = None
+
+    def _load_registry_from_folder(self) -> List[Dict[str, Any]]:
+        if not self.available or self._app is None:
+            return []
+
+        registry_dir = Path(EDGE_EMPLOYEE_FACES_DIR)
+        if not registry_dir.exists():
+            log.warning("Employee face folder not found: %s", registry_dir)
+            return []
+
+        supported_exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+        registry: List[Dict[str, Any]] = []
+
+        for image_path in sorted(registry_dir.rglob("*")):
+            if not image_path.is_file() or image_path.suffix.lower() not in supported_exts:
+                continue
+
+            image = cv2.imread(str(image_path))
+            if image is None:
+                log.warning("Skipping unreadable employee face image: %s", image_path)
+                continue
+
+            try:
+                faces = self._app.get(image)
+            except Exception as exc:
+                log.warning("Failed to extract face embedding from %s: %s", image_path, exc)
+                continue
+
+            if not faces:
+                log.warning("No face detected in employee face image: %s", image_path)
+                continue
+
+            face = max(
+                faces,
+                key=lambda item: max(
+                    0.0,
+                    float(item.bbox[2]) - float(item.bbox[0]),
+                )
+                * max(
+                    0.0,
+                    float(item.bbox[3]) - float(item.bbox[1]),
+                ),
+            )
+            embedding = getattr(face, "embedding", None)
+            if embedding is None or len(embedding) == 0:
+                log.warning("No embedding produced for employee face image: %s", image_path)
+                continue
+
+            stem = image_path.stem
+            registry.append(
+                {
+                    "employee_id": None,
+                    "employee_code": stem,
+                    "employee_name": stem.replace("_", " ").replace("-", " ").strip() or stem,
+                    "embedding": _normalize_embedding(np.asarray(embedding, dtype=np.float32)),
+                }
+            )
+
+        return registry
