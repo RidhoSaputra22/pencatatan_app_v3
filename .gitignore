@@ -75,7 +75,6 @@ lerna-debug.log*
 # Snapshots & Videos
 snapshots/
 videos/
-recordings/
 backend/storage/footage/
 backend/storage/recording_previews/
 test/output/
@@ -158,3 +157,9 @@ rstp.sh
 cctv-ukip*.mp4
 yolo_lab/*
 *.txt
+
+# Keep frontend source folders named "recordings" tracked
+!frontend/app/(protected)/recordings/
+!frontend/app/(protected)/recordings/page.js
+!frontend/components/recordings/
+!frontend/components/recordings/RecordingLibrary.js
