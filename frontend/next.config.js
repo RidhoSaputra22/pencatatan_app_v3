@@ -34,6 +34,10 @@ const nextConfig = {
         destination: `${backendUrl}/api/:path*`,
       },
       {
+        source: "/stream/:path*",
+        destination: `${backendUrl}/stream/:path*`,
+      },
+      {
         source: "/storage/:path*",
         destination: `${backendUrl}/storage/:path*`,
       },
@@ -41,7 +45,8 @@ const nextConfig = {
   },
 
   env: {
-    NEXT_PUBLIC_API_BASE: process.env.NEXT_PUBLIC_API_BASE || backendUrl,
+    // Keep browser requests same-origin and let Next.js rewrites proxy them to the backend.
+    NEXT_PUBLIC_API_BASE: process.env.NEXT_PUBLIC_API_BASE || "",
     NEXT_PUBLIC_EDGE_PUBLIC_BASE_URL:
       process.env.NEXT_PUBLIC_EDGE_PUBLIC_BASE_URL || edgePublicBaseUrl,
     NEXT_PUBLIC_STREAM_URL:

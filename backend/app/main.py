@@ -39,6 +39,7 @@ from .stream_relay import (
 
 import os
 import re
+import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -1419,8 +1420,12 @@ def _schedule_recording_preview(file_path: Path) -> None:
 
 
 def _probe_video_codec(file_path: Path) -> Optional[str]:
+    ffprobe_binary = shutil.which("ffprobe")
+    if not ffprobe_binary:
+        return None
+
     command = [
-        "ffprobe",
+        ffprobe_binary,
         "-v",
         "error",
         "-select_streams",
@@ -1431,7 +1436,10 @@ def _probe_video_codec(file_path: Path) -> Optional[str]:
         "default=noprint_wrappers=1:nokey=1",
         str(file_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+    except OSError:
+        return None
     if result.returncode != 0:
         return None
     codec_name = (result.stdout or "").strip().lower()
@@ -1439,11 +1447,15 @@ def _probe_video_codec(file_path: Path) -> Optional[str]:
 
 
 def _transcode_preview_file(source_path: Path, preview_path: Path) -> None:
+    ffmpeg_binary = shutil.which("ffmpeg")
+    if not ffmpeg_binary:
+        raise RuntimeError("ffmpeg belum terpasang di server, jadi preview browser belum bisa dibuat")
+
     temp_preview_path = preview_path.with_suffix(".tmp.mp4")
     temp_preview_path.unlink(missing_ok=True)
 
     command = [
-        "ffmpeg",
+        ffmpeg_binary,
         "-y",
         "-i",
         str(source_path),

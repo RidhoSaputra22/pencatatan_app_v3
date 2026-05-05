@@ -19,8 +19,33 @@ function joinUrl(base, pathname) {
   }
 }
 
+function normalizeApiBase(base) {
+  const trimmed = (base || "").trim().replace(/\/+$/, "");
+  if (!trimmed) {
+    return "";
+  }
+
+  if (trimmed.startsWith("/")) {
+    return trimmed;
+  }
+
+  if (typeof window === "undefined") {
+    return trimmed;
+  }
+
+  try {
+    const resolved = new URL(trimmed, window.location.origin);
+    if (resolved.origin !== window.location.origin) {
+      return "";
+    }
+    return resolved.pathname === "/" ? "" : resolved.pathname.replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
+}
+
 // API Configuration
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "";
+export const API_BASE = normalizeApiBase(process.env.NEXT_PUBLIC_API_BASE || "");
 export const EDGE_PUBLIC_BASE_URL = process.env.NEXT_PUBLIC_EDGE_PUBLIC_BASE_URL || "";
 export const APP_ENV = process.env.NEXT_PUBLIC_APP_ENV || "";
 export const IS_DEV_ENV = APP_ENV.trim().toLowerCase() === "dev";
