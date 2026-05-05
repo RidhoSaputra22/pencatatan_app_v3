@@ -8,6 +8,7 @@ Sistem monitoring jumlah pengunjung perpustakaan berbasis CCTV dengan YOLOv5 + t
 - **Tracking** (DeepSORT / Centroid Tracker)
 - **Penyaringan pegawai** dengan face recognition berbasis InsightFace/ArcFace
 - **Pengunjung Unik Harian** (masuk 2-3 kali dalam sehari tetap dihitung 1 kali)
+- **Backup footage hasil YOLO** otomatis per segmen 10 menit
 - **Dashboard** dengan statistik real-time + live camera preview
 - Filter per tanggal/periode
 - Export laporan CSV
@@ -143,6 +144,9 @@ EDGE_STREAM_URL=0        # "0" = webcam langsung, "rtsp://..." = IP cam
 EDGE_STREAM_PORT=5000    # Port signaling WebRTC + MJPEG fallback
 EDGE_WEBRTC_ENABLED=true
 EDGE_WEBRTC_ICE_SERVERS=[{"urls":"stun:stun.l.google.com:19302"}]
+EDGE_RECORDING_ENABLED=true
+EDGE_RECORDING_SEGMENT_MINUTES=10
+EDGE_RECORDING_OUTPUT_DIR=./backend/storage/footage
 BACKEND_URL=http://localhost:8000
 
 # Face recognition untuk filter pegawai
@@ -193,6 +197,18 @@ Jika kamera di PC lain, jalankan `rstp/rtsp_webcam_server.py` di PC kamera:
 ```env
 EDGE_STREAM_URL=http://192.168.1.50:8081/video
 ```
+
+## Backup Footage YOLO
+
+- Worker edge sekarang menyimpan **frame yang sudah diberi overlay YOLO/tracking** ke file MP4 otomatis.
+- Satu file backup berisi **10 menit** video dan file selesai akan muncul di `backend/storage/footage`.
+- Nama file memakai format `cctv_recording_cam1_YYYYmmdd_HHMMSS_YYYYmmdd_HHMMSS.mp4`.
+- File yang masih berjalan tidak ditampilkan ke daftar footage sampai segmennya lengkap.
+
+Konfigurasi utama:
+- `EDGE_RECORDING_ENABLED=true` untuk mengaktifkan backup otomatis.
+- `EDGE_RECORDING_SEGMENT_MINUTES=10` untuk durasi setiap segmen backup.
+- `EDGE_RECORDING_FPS=0` berarti mengikuti `EDGE_PROCESSING_MAX_FPS`; jika ingin paksa FPS tertentu, isi misalnya `12`.
 
 ## Database Schema
 

@@ -76,6 +76,9 @@ lerna-debug.log*
 snapshots/
 videos/
 recordings/
+backend/storage/footage/
+backend/storage/recording_previews/
+test/output/
 # *.mp4
 *.avi
 *.mov
@@ -154,3 +157,4 @@ rstp.sh
 !frontend/public/images/logo.png
 cctv-ukip*.mp4
 yolo_lab/*
+*.txt

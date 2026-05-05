@@ -19,6 +19,13 @@ from .config import (
     CAMERA_ID,
     CONFIG_REFRESH,
     EDGE_PROCESSING_MAX_FPS,
+    EDGE_RECORDING_ENABLED,
+    EDGE_RECORDING_FILE_PREFIX,
+    EDGE_RECORDING_FPS,
+    EDGE_RECORDING_MAX_GAP_SECONDS,
+    EDGE_RECORDING_OUTPUT_DIR,
+    EDGE_RECORDING_SEGMENT_MINUTES,
+    EDGE_RECORDING_SEGMENT_SECONDS,
     EDGE_STREAM_MAX_FPS,
     EDGE_STREAM_URL,
     FACE_DETECTION_FRAME_INTERVAL,
@@ -47,6 +54,7 @@ from .detection import load_model, parse_roi, point_in_roi, suppress_duplicate_p
 from .face_recognition import EmployeeFaceRecognizer
 from .logger import get_logger
 from .reid import cleanup_old_tracks, reset_daily_cache, update_track_embedding
+from .recording import SegmentedVideoRecorder
 from .streaming import has_raw_stream_clients, update_latest_frame
 from .tracker import CentroidTracker, DEEPSORT_AVAILABLE, DeepSORTTracker
 from .visualization import draw_bounding_boxes, draw_info_overlay, draw_roi_polygon
@@ -141,6 +149,16 @@ def _output_fps(source_fps: float) -> float:
     if EDGE_STREAM_MAX_FPS > 0:
         return EDGE_STREAM_MAX_FPS
     return 30.0
+
+
+def _recording_fps() -> float:
+    if EDGE_RECORDING_FPS > 0:
+        return EDGE_RECORDING_FPS
+    if EDGE_PROCESSING_MAX_FPS > 0:
+        return EDGE_PROCESSING_MAX_FPS
+    if EDGE_STREAM_MAX_FPS > 0:
+        return EDGE_STREAM_MAX_FPS
+    return 12.0
 
 
 def _resolve_identity_embedding(face_recognizer: EmployeeFaceRecognizer, track) -> Optional[np.ndarray]:
@@ -238,6 +256,22 @@ def real_loop():
     processed_frames = 0
     output_writer = None
     output_video_path = None
+    backup_recorder = SegmentedVideoRecorder(
+        output_dir=EDGE_RECORDING_OUTPUT_DIR,
+        camera_id=CAMERA_ID,
+        segment_seconds=float(EDGE_RECORDING_SEGMENT_SECONDS),
+        fps=_recording_fps(),
+        enabled=EDGE_RECORDING_ENABLED,
+        max_gap_seconds=EDGE_RECORDING_MAX_GAP_SECONDS,
+        file_prefix=EDGE_RECORDING_FILE_PREFIX,
+    )
+
+    if backup_recorder.enabled:
+        log.info(
+            "YOLO backup active: every %d minute(s) -> %s",
+            EDGE_RECORDING_SEGMENT_MINUTES,
+            EDGE_RECORDING_OUTPUT_DIR,
+        )
 
     # Processing cadence is independent from stream cadence; the stream layer can
     # duplicate the latest annotated frame between inference updates.
@@ -299,6 +333,7 @@ def real_loop():
                 cap = None
                 cap_source = ""
                 last_frame_id = 0
+                backup_recorder.reset(reason="stream source changed")
 
             if cap is None or not cap.isOpened():
                 cap = LatestFrameCapture(stream_url)
@@ -566,6 +601,7 @@ def real_loop():
             update_latest_frame(display_frame, raw_frame=raw_frame)
             if output_writer is not None:
                 output_writer.write(display_frame)
+            backup_recorder.write(display_frame, frame_ts=now_ts)
 
             processed_frames += 1
             if is_video_test:
@@ -588,6 +624,7 @@ def real_loop():
             if remaining > 0:
                 time.sleep(remaining)
     finally:
+        backup_recorder.close()
         if cap is not None:
             cap.release()
         if output_writer is not None:

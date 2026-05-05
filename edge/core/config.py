@@ -200,6 +200,17 @@ EDGE_CAPTURE_FFMPEG_OPTIONS = env(
     "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|max_delay;500000|reorder_queue_size;0",
 ).strip()
 
+# Processed footage backup configuration
+EDGE_RECORDING_ENABLED = env_bool("EDGE_RECORDING_ENABLED", True)
+EDGE_RECORDING_OUTPUT_DIR = resolve_project_path(
+    env("EDGE_RECORDING_OUTPUT_DIR", "./backend/storage/footage")
+)
+EDGE_RECORDING_SEGMENT_MINUTES = max(1, env_int("EDGE_RECORDING_SEGMENT_MINUTES", 10))
+EDGE_RECORDING_SEGMENT_SECONDS = EDGE_RECORDING_SEGMENT_MINUTES * 60
+EDGE_RECORDING_FPS = max(0.0, env_float("EDGE_RECORDING_FPS", 0.0))
+EDGE_RECORDING_MAX_GAP_SECONDS = max(1.0, env_float("EDGE_RECORDING_MAX_GAP_SECONDS", 5.0))
+EDGE_RECORDING_FILE_PREFIX = env("EDGE_RECORDING_FILE_PREFIX", "cctv_recording").strip() or "cctv_recording"
+
 # YOLO configuration
 # YOLO_BACKEND: "yolov5" (torch.hub) | "ultralytics" (YOLOv8/v9/v10/v11 via ultralytics package)
 YOLO_BACKEND = env_alias(("YOLO_BACKEND", "BACKEND"), "yolov5").strip().lower()

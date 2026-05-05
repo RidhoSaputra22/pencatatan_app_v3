@@ -2,10 +2,7 @@
 
 import { useAuth } from "@/context/AuthContext";
 import { useCamera } from "@/hooks/useCamera";
-import CameraForm from "@/components/camera/CameraForm";
 import CountingAreaForm from "@/components/camera/CountingAreaForm";
-import ConfigPreview from "@/components/camera/ConfigPreview";
-import FootageUpload from "@/components/camera/FootageUpload";
 import StreamingStatus from "@/components/camera/StreamingStatus";
 import Alert from "@/components/ui/Alert";
 import Heading from "@/components/ui/Heading";
@@ -82,8 +79,6 @@ export default function CameraPage() {
 
       {/* Client Streaming Status */}
       <StreamingStatus />
-
-      
     </>
   );
 }

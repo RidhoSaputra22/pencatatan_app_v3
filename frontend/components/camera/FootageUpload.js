@@ -81,10 +81,11 @@ export default function FootageUpload({ camera, onSourceChanged }) {
   const isCurrentSource = (filePath) => camera?.stream_url === filePath;
 
   return (
-    <Section title="Upload Footage CCTV">
+    <Section title="Footage CCTV & Backup YOLO">
       <p className="text-sm opacity-70 mb-3">
         Upload file rekaman CCTV dari komputer Anda. File akan diproses oleh edge worker
-        (YOLOv5 + tracking) untuk menghitung pengunjung.
+        (YOLOv5 + tracking) untuk menghitung pengunjung. Backup otomatis hasil YOLO per 10 menit
+        juga akan muncul di daftar ini.
       </p>
 
       {/* Upload area */}
@@ -148,6 +149,9 @@ export default function FootageUpload({ camera, onSourceChanged }) {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-medium truncate">{f.filename}</span>
+                    {f.is_auto_backup && (
+                      <span className="badge badge-secondary badge-sm">YOLO Backup</span>
+                    )}
                     {isCurrentSource(f.path) && (
                       <span className="badge badge-primary badge-sm">Aktif</span>
                     )}
@@ -155,6 +159,12 @@ export default function FootageUpload({ camera, onSourceChanged }) {
                   <div className="text-xs opacity-50 mt-0.5">
                     {f.size_mb} MB — {new Date(f.uploaded_at).toLocaleString("id-ID")}
                   </div>
+                  {f.recorded_from && f.recorded_until && (
+                    <div className="text-xs opacity-60 mt-0.5">
+                      Segmen: {new Date(f.recorded_from).toLocaleString("id-ID")} -{" "}
+                      {new Date(f.recorded_until).toLocaleString("id-ID")}
+                    </div>
+                  )}
                 </div>
                 <div className="flex gap-1 ml-2 shrink-0">
                   {!isCurrentSource(f.path) && (

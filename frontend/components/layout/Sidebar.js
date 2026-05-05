@@ -99,6 +99,29 @@ function VisitsIcon() {
     </svg>
   );
 }
+function RecordingsIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      strokeWidth="1.5"
+      stroke="currentColor"
+      className="size-6"
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M3.375 7.5A1.125 1.125 0 0 1 4.5 6.375h15A1.125 1.125 0 0 1 20.625 7.5v9A1.125 1.125 0 0 1 19.5 17.625h-15A1.125 1.125 0 0 1 3.375 16.5v-9Z"
+      />
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M8.25 9.375 14.25 12l-6 2.625v-5.25Z"
+      />
+    </svg>
+  );
+}
 
 export default function Sidebar({ mobileOpen = false, setMobileOpen }) {
   const { user } = useAuth();
@@ -162,6 +185,10 @@ export default function Sidebar({ mobileOpen = false, setMobileOpen }) {
           "Laporan Pengunjung",
           [navLink("/visits", "Pengunjung", <VisitsIcon />)],
         )}
+      {navSection(
+        "Arsip CCTV",
+        [navLink("/recordings", "Rekaman CCTV", <RecordingsIcon />)],
+      )}
     </ul>
   );
 

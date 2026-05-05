@@ -12,7 +12,7 @@ from collections import defaultdict
 
 from fastapi import FastAPI, Depends, HTTPException, Query, Form, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -38,13 +38,21 @@ from .stream_relay import (
 )
 
 import os
+import re
+import subprocess
+import threading
 from pathlib import Path
+from urllib.parse import quote
 
 app = FastAPI(title="Visitor Monitoring API", version="1.0.0")
 
 # Footage storage directory
 FOOTAGE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / "storage" / "footage"
 FOOTAGE_DIR.mkdir(parents=True, exist_ok=True)
+RECORDING_PREVIEW_DIR = (
+    Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / "storage" / "recording_previews"
+)
+RECORDING_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
 EMPLOYEE_FACES_DIR = Path(settings.employee_faces_dir)
 EMPLOYEE_FACES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1271,10 +1279,210 @@ def stats_per_second(
     return [{"second": row[0], "count": row[1]} for row in rows]
 
 
-# ==================== Footage Upload (Client CCTV) ====================
+# ==================== Footage Storage (Client Upload + YOLO Backup) ====================
 
 ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mkv", ".mov", ".flv", ".wmv", ".webm"}
 MAX_FOOTAGE_SIZE = 500 * 1024 * 1024  # 500 MB
+AUTO_RECORDING_FILENAME_RE = re.compile(
+    r"^(?P<prefix>[a-z0-9_]+)_cam(?P<camera_id>\d+)_(?P<start>\d{8}_\d{6})_(?P<end>\d{8}_\d{6})\.mp4$"
+)
+AUTO_RECORDING_PREFIXES = {
+    prefix.strip().lower()
+    for prefix in (
+        "yolo_backup",
+        "cctv_recording",
+        os.getenv("EDGE_RECORDING_FILE_PREFIX", "cctv_recording"),
+    )
+    if prefix and prefix.strip()
+}
+SUPPORTED_BROWSER_VIDEO_CODECS = {"h264", "vp8", "vp9", "av1"}
+_preview_locks: dict[str, threading.Lock] = {}
+_preview_locks_guard = threading.Lock()
+_preview_jobs: set[str] = set()
+
+
+def _parse_recording_metadata(filename: str) -> Optional[dict]:
+    match = AUTO_RECORDING_FILENAME_RE.match(filename)
+    if not match:
+        return None
+    if match.group("prefix").lower() not in AUTO_RECORDING_PREFIXES:
+        return None
+
+    try:
+        recorded_from = datetime.strptime(match.group("start"), "%Y%m%d_%H%M%S")
+        recorded_until = datetime.strptime(match.group("end"), "%Y%m%d_%H%M%S")
+    except ValueError:
+        return None
+
+    return {
+        "camera_id": int(match.group("camera_id")),
+        "recorded_from": recorded_from,
+        "recorded_until": recorded_until,
+        "segment_minutes": round((recorded_until - recorded_from).total_seconds() / 60, 2),
+    }
+
+
+def _serialize_footage_file(file_path: Path) -> dict:
+    stat = file_path.stat()
+    recording_meta = _parse_recording_metadata(file_path.name)
+    uploaded_at = datetime.fromtimestamp(stat.st_ctime)
+    codec_name = _probe_video_codec(file_path)
+    preview_path = _recording_preview_path(file_path.name)
+    preview_ready = False
+    preview_updated_at = None
+
+    if codec_name in SUPPORTED_BROWSER_VIDEO_CODECS:
+        preview_ready = True
+        preview_updated_at = uploaded_at.isoformat()
+    elif preview_path.exists() and preview_path.stat().st_mtime >= file_path.stat().st_mtime:
+        preview_ready = True
+        preview_updated_at = datetime.fromtimestamp(preview_path.stat().st_mtime).isoformat()
+    elif recording_meta:
+        _schedule_recording_preview(file_path)
+
+    payload = {
+        "filename": file_path.name,
+        "size_mb": round(stat.st_size / (1024 * 1024), 2),
+        "path": str(file_path.resolve()),
+        "uploaded_at": uploaded_at.isoformat(),
+        "public_url": f"/storage/footage/{quote(file_path.name)}",
+        "playback_url": f"/api/recordings/{quote(file_path.name)}/media",
+        "source_type": "auto_recording" if recording_meta else "manual_upload",
+        "is_auto_backup": bool(recording_meta),
+        "is_auto_recording": bool(recording_meta),
+        "is_yolo_processed": bool(recording_meta),
+        "video_codec": codec_name,
+        "preview_ready": preview_ready,
+        "preview_updated_at": preview_updated_at,
+    }
+    if recording_meta:
+        payload.update(
+            {
+                "camera_id": recording_meta["camera_id"],
+                "recorded_from": recording_meta["recorded_from"].isoformat(),
+                "recorded_until": recording_meta["recorded_until"].isoformat(),
+                "segment_minutes": recording_meta["segment_minutes"],
+            }
+        )
+    return payload
+
+
+def _list_serialized_footage(*, auto_only: bool = False) -> List[dict]:
+    files: List[dict] = []
+    sorted_files = sorted(FOOTAGE_DIR.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True)
+    for file_path in sorted_files:
+        if not file_path.is_file():
+            continue
+        if file_path.suffix.lower() not in ALLOWED_VIDEO_EXTENSIONS:
+            continue
+        if file_path.name.endswith(".partial.mp4"):
+            continue
+
+        serialized = _serialize_footage_file(file_path)
+        if auto_only and not serialized.get("is_auto_recording"):
+            continue
+        files.append(serialized)
+    return files
+
+
+def _recording_preview_lock(filename: str) -> threading.Lock:
+    with _preview_locks_guard:
+        lock = _preview_locks.get(filename)
+        if lock is None:
+            lock = threading.Lock()
+            _preview_locks[filename] = lock
+        return lock
+
+
+def _recording_preview_path(filename: str) -> Path:
+    return RECORDING_PREVIEW_DIR / f"{Path(filename).stem}.browser.mp4"
+
+
+def _schedule_recording_preview(file_path: Path) -> None:
+    job_key = str(file_path.resolve())
+
+    with _preview_locks_guard:
+        if job_key in _preview_jobs:
+            return
+        _preview_jobs.add(job_key)
+
+    def worker() -> None:
+        try:
+            _ensure_browser_playable_recording(file_path)
+        except Exception as exc:
+            print(f"[recording-preview] Failed to prepare preview for {file_path.name}: {exc}")
+        finally:
+            with _preview_locks_guard:
+                _preview_jobs.discard(job_key)
+
+    threading.Thread(target=worker, daemon=True, name=f"preview-{file_path.stem}").start()
+
+
+def _probe_video_codec(file_path: Path) -> Optional[str]:
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=codec_name",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(file_path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        return None
+    codec_name = (result.stdout or "").strip().lower()
+    return codec_name or None
+
+
+def _transcode_preview_file(source_path: Path, preview_path: Path) -> None:
+    temp_preview_path = preview_path.with_suffix(".tmp.mp4")
+    temp_preview_path.unlink(missing_ok=True)
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source_path),
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(temp_preview_path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0 or not temp_preview_path.exists():
+        temp_preview_path.unlink(missing_ok=True)
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        detail_msg = detail[-1] if detail else "Unknown ffmpeg error"
+        raise RuntimeError(f"Gagal menyiapkan preview video: {detail_msg}")
+
+    temp_preview_path.replace(preview_path)
+
+
+def _ensure_browser_playable_recording(file_path: Path) -> Path:
+    codec_name = _probe_video_codec(file_path)
+    if codec_name in SUPPORTED_BROWSER_VIDEO_CODECS:
+        return file_path
+
+    preview_path = _recording_preview_path(file_path.name)
+    if preview_path.exists() and preview_path.stat().st_mtime >= file_path.stat().st_mtime:
+        return preview_path
+
+    lock = _recording_preview_lock(file_path.name)
+    with lock:
+        if preview_path.exists() and preview_path.stat().st_mtime >= file_path.stat().st_mtime:
+            return preview_path
+        _transcode_preview_file(file_path, preview_path)
+    return preview_path
 
 
 @app.post("/api/footage/upload")
@@ -1289,7 +1497,6 @@ async def upload_footage(
     Upload file video CCTV dari client melalui frontend.
     Video disimpan di backend/storage/footage/ dan bisa diset sebagai sumber kamera.
     """
-    import re
     import uuid
 
     if not video.filename:
@@ -1339,23 +1546,52 @@ async def upload_footage(
         "size_mb": round(total_size / (1024 * 1024), 2),
         "path": footage_abs_path,
         "set_as_source": set_as_source,
+        "source_type": "manual_upload",
+        "is_auto_backup": False,
+        "is_yolo_processed": False,
     }
 
 
 @app.get("/api/footage")
 def list_footage(_: User = Depends(require_role("ADMIN", "OPERATOR"))):
-    """List semua file footage yang sudah diupload."""
-    files = []
-    for f in sorted(FOOTAGE_DIR.iterdir()):
-        if f.is_file() and f.suffix.lower() in ALLOWED_VIDEO_EXTENSIONS:
-            stat = f.stat()
-            files.append({
-                "filename": f.name,
-                "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                "path": str(f.resolve()),
-                "uploaded_at": datetime.fromtimestamp(stat.st_ctime).isoformat(),
-            })
-    return files
+    """List semua file footage tersimpan, termasuk backup YOLO otomatis."""
+    return _list_serialized_footage(auto_only=False)
+
+
+@app.get("/api/recordings")
+def list_recordings(_: User = Depends(require_role("ADMIN", "OPERATOR"))):
+    """List rekaman otomatis CCTV yang sudah selesai dipotong per segmen."""
+    return _list_serialized_footage(auto_only=True)
+
+
+@app.get("/api/recordings/{filename}/media")
+def stream_recording_media(
+    filename: str,
+):
+    """Serve rekaman CCTV dengan fallback transcode agar bisa diputar di browser."""
+    if not re.match(r"^[\w\-. ]+$", filename):
+        raise HTTPException(status_code=400, detail="Nama file tidak valid")
+
+    if _parse_recording_metadata(filename) is None:
+        raise HTTPException(status_code=400, detail="File bukan rekaman otomatis CCTV")
+
+    file_path = FOOTAGE_DIR / filename
+    if not file_path.resolve().parent == FOOTAGE_DIR.resolve():
+        raise HTTPException(status_code=400, detail="Path tidak valid")
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File tidak ditemukan")
+
+    try:
+        media_path = _ensure_browser_playable_recording(file_path)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return FileResponse(
+        path=media_path,
+        media_type="video/mp4",
+        filename=file_path.name,
+    )
 
 
 @app.delete("/api/footage/{filename}")
@@ -1365,8 +1601,6 @@ def delete_footage(
     _: User = Depends(require_role("ADMIN")),
 ):
     """Hapus file footage yang sudah diupload."""
-    import re
-
     # Sanitize: only allow safe filename chars
     if not re.match(r"^[\w\-. ]+$", filename):
         raise HTTPException(status_code=400, detail="Nama file tidak valid")
@@ -1393,6 +1627,39 @@ def delete_footage(
     return {"ok": True, "message": f"File '{filename}' berhasil dihapus"}
 
 
+@app.delete("/api/recordings/{filename}")
+def delete_recording(
+    filename: str,
+    session: Session = Depends(get_session),
+    _: User = Depends(require_role("ADMIN")),
+):
+    """Hapus file rekaman otomatis CCTV."""
+    if not re.match(r"^[\w\-. ]+$", filename):
+        raise HTTPException(status_code=400, detail="Nama file tidak valid")
+
+    if _parse_recording_metadata(filename) is None:
+        raise HTTPException(status_code=400, detail="File bukan rekaman otomatis CCTV")
+
+    file_path = FOOTAGE_DIR / filename
+    if not file_path.resolve().parent == FOOTAGE_DIR.resolve():
+        raise HTTPException(status_code=400, detail="Path tidak valid")
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File tidak ditemukan")
+
+    abs_path = str(file_path.resolve())
+    cameras = session.exec(select(Camera).where(Camera.stream_url == abs_path)).all()
+    if cameras:
+        cam_names = ", ".join(c.name for c in cameras)
+        raise HTTPException(
+            status_code=409,
+            detail=f"File sedang digunakan oleh kamera: {cam_names}. Ubah sumber kamera terlebih dahulu.",
+        )
+
+    file_path.unlink()
+    return {"ok": True, "message": f"Rekaman '{filename}' berhasil dihapus"}
+
+
 @app.post("/api/footage/{filename}/set-source")
 def set_footage_as_source(
     filename: str,
@@ -1401,8 +1668,6 @@ def set_footage_as_source(
     _: User = Depends(require_role("ADMIN")),
 ):
     """Set file footage sebagai sumber video kamera."""
-    import re
-
     if not re.match(r"^[\w\-. ]+$", filename):
         raise HTTPException(status_code=400, detail="Nama file tidak valid")
 
