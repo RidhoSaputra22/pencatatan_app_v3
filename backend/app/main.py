@@ -5,6 +5,7 @@ Visitor Monitoring API - Backend FastAPI
 Sesuai dengan Project Concept: monitoring pengunjung perpustakaan dengan YOLOv5
 Database: SQLite (tanpa Docker)
 """
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, date
 from typing import List, Optional, Any
 
@@ -56,6 +57,11 @@ RECORDING_PREVIEW_DIR = (
 RECORDING_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
 EMPLOYEE_FACES_DIR = Path(settings.employee_faces_dir)
 EMPLOYEE_FACES_DIR.mkdir(parents=True, exist_ok=True)
+RECORDING_PREVIEW_MAX_WORKERS = max(1, int(os.getenv("RECORDING_PREVIEW_MAX_WORKERS", "1")))
+RECORDING_PREVIEW_EXECUTOR = ThreadPoolExecutor(
+    max_workers=RECORDING_PREVIEW_MAX_WORKERS,
+    thread_name_prefix="recording-preview",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1416,7 +1422,7 @@ def _schedule_recording_preview(file_path: Path) -> None:
             with _preview_locks_guard:
                 _preview_jobs.discard(job_key)
 
-    threading.Thread(target=worker, daemon=True, name=f"preview-{file_path.stem}").start()
+    RECORDING_PREVIEW_EXECUTOR.submit(worker)
 
 
 def _probe_video_codec(file_path: Path) -> Optional[str]:
@@ -1457,6 +1463,9 @@ def _transcode_preview_file(source_path: Path, preview_path: Path) -> None:
     command = [
         ffmpeg_binary,
         "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
         "-i",
         str(source_path),
         "-an",
