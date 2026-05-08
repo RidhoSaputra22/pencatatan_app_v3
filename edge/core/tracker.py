@@ -50,6 +50,8 @@ class Track:
     embedding: Optional[np.ndarray] = None  # ReID embedding
     confidence: float = 0.0
     disappeared: int = 0
+    hits: int = 1
+    age: int = 1
     in_roi: bool = False
     is_new: bool = True
     last_direction: Optional[str] = None
@@ -103,8 +105,10 @@ class DeepSORTTracker:
 
     def _create_deepsort_tracker(self):
         return DeepSort(
+            max_iou_distance=0.7,
             max_age=self.max_age,
             n_init=self.n_init,
+            nms_max_overlap=0.85,
             max_cosine_distance=self.max_cosine_distance,
             embedder="mobilenet",
             half=False,
@@ -136,9 +140,9 @@ class DeepSORTTracker:
             return self.tracks
         
         if len(detections) == 0:
-            # No detections - update tracker with empty list
-            self.tracker.update_tracks([], frame=frame)
-            self._update_tracks_from_deepsort()
+            # Keep DeepSORT/Kalman predictions alive during short detector misses.
+            tracks = self.tracker.update_tracks([], frame=frame)
+            self._update_tracks_from_deepsort(tracks)
             return self.tracks
         
         # Format detections for DeepSORT: [[x1, y1, w, h], conf, class]
@@ -175,10 +179,12 @@ class DeepSORTTracker:
                 continue
             
             tid = track.track_id
-            active_ids.add(tid)
             
             # Get bounding box
-            ltrb = track.to_ltrb()  # [x1, y1, x2, y2]
+            ltrb = track.to_ltrb(orig=True, orig_strict=False)  # [x1, y1, x2, y2]
+            if ltrb is None:
+                continue
+            active_ids.add(tid)
             bbox = (float(ltrb[0]), float(ltrb[1]), float(ltrb[2]), float(ltrb[3]))
             
             # Calculate centroid
@@ -188,9 +194,19 @@ class DeepSORTTracker:
             # Get embedding if available
             embedding = None
             if hasattr(track, 'get_feature') and callable(track.get_feature):
-                embedding = track.get_feature()
+                try:
+                    embedding = track.get_feature()
+                except (IndexError, TypeError):
+                    embedding = None
             elif hasattr(track, 'features') and track.features is not None and len(track.features) > 0:
                 embedding = np.array(track.features[-1])
+
+            det_conf = None
+            if hasattr(track, 'get_det_conf') and callable(track.get_det_conf):
+                det_conf = track.get_det_conf()
+            time_since_update = int(getattr(track, "time_since_update", 0) or 0)
+            hits = int(getattr(track, "hits", 1) or 1)
+            age = int(getattr(track, "age", hits) or hits)
             
             # Update or create track
             if tid in self.tracks:
@@ -198,14 +214,22 @@ class DeepSORTTracker:
                 self.tracks[tid].bbox = bbox
                 if embedding is not None:
                     self.tracks[tid].embedding = embedding
-                self.tracks[tid].disappeared = 0
+                if det_conf is not None:
+                    self.tracks[tid].confidence = float(det_conf)
+                self.tracks[tid].disappeared = time_since_update
+                self.tracks[tid].hits = hits
+                self.tracks[tid].age = age
+                self.tracks[tid].is_new = False
             else:
                 self.tracks[tid] = Track(
                     tid=tid,
                     centroid=(cx, cy),
                     bbox=bbox,
                     embedding=embedding,
-                    confidence=0.0,
+                    confidence=float(det_conf) if det_conf is not None else 0.0,
+                    disappeared=time_since_update,
+                    hits=hits,
+                    age=age,
                     is_new=True
                 )
         
@@ -236,6 +260,7 @@ class CentroidTrackerFallback:
             to_del = []
             for tid, tr in self.tracks.items():
                 tr.disappeared += 1
+                tr.age += 1
                 if tr.disappeared > self.max_disappeared:
                     to_del.append(tid)
             for tid in to_del:
@@ -277,6 +302,9 @@ class CentroidTrackerFallback:
             self.tracks[tid].centroid = tuple(det_centroids[d_idx])
             self.tracks[tid].bbox = detections[d_idx]
             self.tracks[tid].disappeared = 0
+            self.tracks[tid].hits += 1
+            self.tracks[tid].age += 1
+            self.tracks[tid].is_new = False
 
             used_tracks.add(tid)
             used_dets.add(d_idx)
@@ -288,6 +316,7 @@ class CentroidTrackerFallback:
         for tid in track_ids:
             if tid not in used_tracks:
                 self.tracks[tid].disappeared += 1
+                self.tracks[tid].age += 1
                 if self.tracks[tid].disappeared > self.max_disappeared:
                     to_del.append(tid)
         for tid in to_del:

@@ -8,6 +8,7 @@ import numpy as np
 
 from .config import (
     EDGE_CAPTURE_FFMPEG_OPTIONS,
+    EDGE_FILE_FRAME_STEP,
     EDGE_CAPTURE_OPEN_TIMEOUT_MS,
     EDGE_CAPTURE_READ_TIMEOUT_MS,
 )
@@ -101,6 +102,12 @@ class LatestFrameCapture:
             int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0),
             int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0),
         )
+        if self._is_file:
+            # Local footage is used for validation/counting, so process it sequentially.
+            # The latest-frame strategy is great for live streams, but it can skip
+            # fast exits in a short CCTV file when inference is slower than playback.
+            return True
+
         self._thread = threading.Thread(
             target=self._reader_loop,
             name="latest-frame-capture",
@@ -144,6 +151,25 @@ class LatestFrameCapture:
         Old buffered frames are skipped automatically because only the latest one is retained.
         """
         self._reap_pending_releases()
+        if self._is_file:
+            capture = self._capture
+            if capture is None or not self._running:
+                return False, None, last_frame_id
+
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                self._file_ended = True
+                log.info("Video file ended.")
+                return False, None, last_frame_id
+
+            self._frame_id += 1
+            for _ in range(EDGE_FILE_FRAME_STEP - 1):
+                if not capture.grab():
+                    self._file_ended = True
+                    break
+                self._frame_id += 1
+            return True, frame, self._frame_id
+
         with self._condition:
             self._condition.wait_for(
                 lambda: (

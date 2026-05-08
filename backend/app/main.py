@@ -6,7 +6,7 @@ Sesuai dengan Project Concept: monitoring pengunjung perpustakaan dengan YOLOv5
 Database: SQLite (tanpa Docker)
 """
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import List, Optional, Any
 
 from collections import defaultdict
@@ -83,6 +83,10 @@ app.mount(
 UDP_RELAY_HOST = os.getenv("UDP_RELAY_HOST", "0.0.0.0")
 UDP_RELAY_PORT = int(os.getenv("UDP_RELAY_PORT", "9999"))
 EMPLOYEE_CODE_MAX_LENGTH = 10
+try:
+    VISIT_EVENT_DEDUPE_SECONDS = max(0.0, float(os.getenv("VISIT_EVENT_DEDUPE_SECONDS", "20")))
+except ValueError:
+    VISIT_EVENT_DEDUPE_SECONDS = 20.0
 
 
 # ==================== Pydantic Schemas ====================
@@ -901,6 +905,28 @@ def ingest_event(payload: EventIn, session: Session = Depends(get_session)):
     person_type = (payload.person_type or "CUSTOMER").upper()
     if person_type not in {"CUSTOMER", "EMPLOYEE"}:
         person_type = "CUSTOMER"
+    visit_date = payload.event_time.date()
+
+    if VISIT_EVENT_DEDUPE_SECONDS > 0:
+        window_start = payload.event_time - timedelta(seconds=VISIT_EVENT_DEDUPE_SECONDS)
+        window_end = payload.event_time + timedelta(seconds=VISIT_EVENT_DEDUPE_SECONDS)
+        duplicate = session.exec(
+            select(VisitEvent).where(
+                VisitEvent.camera_id == payload.camera_id,
+                VisitEvent.area_id == area_id,
+                VisitEvent.visitor_key == payload.visitor_key,
+                VisitEvent.direction == payload.direction,
+                VisitEvent.person_type == person_type,
+                VisitEvent.event_time >= window_start,
+                VisitEvent.event_time <= window_end,
+            )
+        ).first()
+        if duplicate:
+            return {
+                "ok": True,
+                "is_new_unique": False,
+                "duplicate": True,
+            }
     
     # Create visit event
     ev = VisitEvent(
@@ -927,7 +953,6 @@ def ingest_event(payload: EventIn, session: Session = Depends(get_session)):
         }
 
     # Handle unique daily visitor
-    visit_date = payload.event_time.date()
     is_new_unique = False
     
     visitor_daily = session.exec(

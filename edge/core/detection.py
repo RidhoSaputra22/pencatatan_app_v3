@@ -9,6 +9,7 @@ from .config import (
     CONF_TH,
     DEVICE,
     DUPLICATE_CONTAINMENT_THRESHOLD,
+    DUPLICATE_IOU_THRESHOLD,
     IOU_TH,
     REPO,
     SUPPRESS_NESTED_DUPLICATES,
@@ -196,6 +197,15 @@ def _bbox_intersection(
     return inter_w * inter_h
 
 
+def _bbox_iou(
+    box_a: Tuple[float, float, float, float],
+    box_b: Tuple[float, float, float, float],
+) -> float:
+    inter_area = _bbox_intersection(box_a, box_b)
+    union = _bbox_area(box_a) + _bbox_area(box_b) - inter_area
+    return inter_area / union if union > 0 else 0.0
+
+
 def _coverage_ratio(
     box_a: Tuple[float, float, float, float],
     box_b: Tuple[float, float, float, float],
@@ -212,6 +222,7 @@ def _is_nested_duplicate(
     candidate: Tuple[float, float, float, float, float],
     existing: Tuple[float, float, float, float, float],
     containment_threshold: float = 0.9,
+    iou_threshold: float = 0.85,
     x_alignment_ratio: float = 0.25,
     height_ratio_threshold: float = 1.2,
 ) -> bool:
@@ -221,6 +232,9 @@ def _is_nested_duplicate(
     exist_area = _bbox_area(exist_box)
     if cand_area <= 0 or exist_area <= 0:
         return False
+
+    if _bbox_iou(cand_box, exist_box) >= iou_threshold:
+        return True
 
     cov_candidate, cov_existing = _coverage_ratio(cand_box, exist_box)
 
@@ -253,6 +267,7 @@ def suppress_duplicate_person_detections(
     detections: List[Tuple[float, float, float, float, float]],
     enabled: bool = SUPPRESS_NESTED_DUPLICATES,
     containment_threshold: float = DUPLICATE_CONTAINMENT_THRESHOLD,
+    iou_threshold: float = DUPLICATE_IOU_THRESHOLD,
 ) -> List[Tuple[float, float, float, float, float]]:
     """Drop nested duplicate person boxes before tracking.
 
@@ -278,6 +293,7 @@ def suppress_duplicate_person_detections(
                 detection,
                 kept,
                 containment_threshold=containment_threshold,
+                iou_threshold=iou_threshold,
             )
             for kept in filtered
         ):

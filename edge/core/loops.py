@@ -46,22 +46,34 @@ from .config import (
     TEST_OUTPUT_NAME,
     TEST_ROI_JSON,
     TRACK_CONFIRM_FRAMES,
+    TRACK_ENTRY_CONFIRM_FRAMES,
+    TRACK_EVENT_COOLDOWN_SECONDS,
+    TRACK_EXIT_ALLOW_WITHOUT_ENTRY,
+    TRACK_EXIT_BOTTOM_MARGIN,
+    TRACK_EXIT_BOTTOM_CONFIRM_FRAMES,
+    TRACK_EXIT_CONFIRM_FRAMES,
+    TRACK_EXIT_EDGE_MARGIN,
+    TRACK_EXIT_MIN_DELTA_Y,
+    TRACK_EXIT_WITHOUT_ENTRY_MIN_FRAMES,
     TRACK_MAX_COSINE_DISTANCE,
     TRACK_MAX_DISAPPEARED,
     TRACK_MAX_DISTANCE,
+    TRACK_REENTRY_COOLDOWN_SECONDS,
+    TRACK_ROI_POINT,
+    TRACK_SAME_TRACK_OUT_COOLDOWN_SECONDS,
 )
 from .detection import load_model, parse_roi, point_in_roi, suppress_duplicate_person_detections
 from .face_recognition import EmployeeFaceRecognizer
 from .logger import get_logger
-from .reid import cleanup_old_tracks, reset_daily_cache, update_track_embedding
+from .reid import cleanup_old_tracks, reset_daily_cache, update_track_identity
 from .recording import SegmentedVideoRecorder
 from .streaming import has_raw_stream_clients, update_latest_frame
 from .tracker import CentroidTracker, DEEPSORT_AVAILABLE, DeepSORTTracker
-from .visualization import draw_bounding_boxes, draw_info_overlay, draw_roi_polygon
+from .visualization import draw_bounding_boxes, draw_exit_gate, draw_info_overlay, draw_roi_polygon
 
 log = get_logger("loops")
 
-EVENT_COOLDOWN = 10.0
+EVENT_COOLDOWN = TRACK_EVENT_COOLDOWN_SECONDS
 REFERENCE_FRAME_SIZE = (TEST_FRAME_WIDTH, TEST_FRAME_HEIGHT)
 
 
@@ -101,6 +113,179 @@ def _send_track_event(
     return send_visitor_event(payload, token)
 
 
+def _track_counting_point(track) -> Tuple[float, float]:
+    """Use a stable body point for ROI tests; feet work better for gate crossing."""
+    x1, y1, x2, y2 = track.bbox
+    point_mode = TRACK_ROI_POINT
+    center_x = (float(x1) + float(x2)) / 2.0
+    if point_mode in {"feet", "foot", "bottom"}:
+        return center_x, float(y2)
+    if point_mode in {"head", "top"}:
+        return center_x, float(y1)
+    return float(track.centroid[0]), float(track.centroid[1])
+
+
+def _bbox_near_frame_edge(
+    bbox: Tuple[float, float, float, float],
+    frame_width: int,
+    frame_height: int,
+    margin: float = TRACK_EXIT_EDGE_MARGIN,
+) -> bool:
+    x1, y1, x2, y2 = bbox
+    return (
+        float(x1) <= margin
+        or float(y1) <= margin
+        or float(x2) >= frame_width - margin
+        or float(y2) >= frame_height - margin
+    )
+
+
+def _roi_bottom_y(roi: Optional[List[List[float]]], frame_height: int) -> float:
+    if not roi:
+        return float(frame_height)
+    return max(float(point[1]) for point in roi)
+
+
+def _bbox_in_bottom_exit_zone(
+    bbox: Tuple[float, float, float, float],
+    roi: Optional[List[List[float]]],
+    frame_height: int,
+    margin: float = TRACK_EXIT_BOTTOM_MARGIN,
+) -> bool:
+    if margin <= 0:
+        return False
+
+    bottom_y = float(bbox[3])
+    roi_bottom = _roi_bottom_y(roi, frame_height)
+    # For near-full-frame ROI, use the earlier of the ROI bottom band and frame bottom band.
+    threshold = min(float(frame_height) - margin, roi_bottom - (margin * 0.35))
+    threshold = max(0.0, threshold)
+    return bottom_y >= threshold
+
+
+def _exit_gate_y(roi: Optional[List[List[float]]], frame_height: int) -> int:
+    roi_bottom = _roi_bottom_y(roi, frame_height)
+    gate_y = min(
+        float(frame_height) - TRACK_EXIT_BOTTOM_MARGIN,
+        roi_bottom - (TRACK_EXIT_BOTTOM_MARGIN * 0.35),
+    )
+    return int(max(0.0, min(float(frame_height - 1), gate_y)))
+
+
+def _identity_ready(identity: Dict[str, Any]) -> bool:
+    return identity.get("identity_status") in {"CONFIRMED", "FALLBACK"}
+
+
+def _classification_from_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "person_type": state.get("person_type", "CUSTOMER"),
+        "employee_id": state.get("employee_id"),
+        "employee_code": state.get("employee_code"),
+        "employee_name": state.get("employee_name"),
+        "match_score": state.get("match_score"),
+        "recognition_source": state.get("recognition_source"),
+    }
+
+
+def _state_can_exit(state: Dict[str, Any]) -> bool:
+    person_type = state.get("person_type", "CUSTOMER")
+    has_logged_entry = bool(state.get("entry_logged"))
+    observed_long_enough = (
+        max(
+            int(state.get("seen_frames", 0)),
+            int(state.get("track_hits", 0)),
+            int(state.get("observed_frames", 0)),
+        )
+        >= TRACK_EXIT_WITHOUT_ENTRY_MIN_FRAMES
+    )
+    return (
+        person_type not in {"UNKNOWN", "EMPLOYEE"}
+        and bool(state.get("visitor_key"))
+        and (
+            has_logged_entry
+            or (TRACK_EXIT_ALLOW_WITHOUT_ENTRY and observed_long_enough)
+        )
+    )
+
+
+def _finalize_open_exit_states(
+    visitor_states: Dict[int, Dict[str, Any]],
+    visitor_flow_states: Dict[str, Dict[str, Any]],
+    last_event_time: Dict[str, float],
+    roi: Optional[List[List[float]]],
+    frame_width: int,
+    frame_height: int,
+    area_id: Optional[int],
+    area_direction_mode: str,
+    token: Optional[str],
+    now_ts: float,
+) -> int:
+    """Flush likely OUT events before a local video source restarts."""
+    if area_direction_mode not in {"BOTH", "OUT"}:
+        return 0
+
+    now_time = datetime.now()
+    counted = 0
+    for track_id, state in list(visitor_states.items()):
+        visitor_key = state.get("visitor_key", "")
+        last_bbox = state.get("last_bbox")
+        if (
+            not visitor_key
+            or not last_bbox
+            or state.get("exit_logged")
+            or not _state_can_exit(state)
+        ):
+            continue
+
+        if not (
+            _bbox_near_frame_edge(last_bbox, frame_width, frame_height)
+            or _bbox_in_bottom_exit_zone(last_bbox, roi, frame_height)
+            or not bool(state.get("last_in_roi", True))
+        ):
+            continue
+
+        debounce_key = f"{visitor_key}_OUT"
+        if now_ts - last_event_time.get(debounce_key, 0.0) < EVENT_COOLDOWN:
+            continue
+
+        classification = _classification_from_state(state)
+        result = _send_track_event(
+            "OUT",
+            track_id,
+            visitor_key,
+            area_id,
+            now_time,
+            0.0,
+            classification,
+            token,
+        )
+        if not result["success"]:
+            log.error(
+                "Failed to send final OUT event: %s",
+                result.get("error", "Unknown"),
+            )
+            continue
+
+        last_event_time[debounce_key] = now_ts
+        state["entry_logged"] = False
+        state["pending_entry"] = False
+        state["direction"] = "OUT"
+        state["exit_logged"] = True
+        flow = visitor_flow_states.setdefault(visitor_key, {})
+        flow["inside"] = False
+        flow["last_out_ts"] = now_ts
+        flow["suppress_in_until"] = now_ts + TRACK_REENTRY_COOLDOWN_SECONDS
+        counted += 1
+        log.info(
+            "Finalized OUT at source end track=%s visitor=%s observed=%s",
+            track_id,
+            visitor_key[:8],
+            state.get("observed_frames", state.get("seen_frames", 0)),
+        )
+
+    return counted
+
+
 def _scale_roi(
     roi: List[List[float]],
     frame_width: int,
@@ -137,6 +322,13 @@ def _default_roi(frame_width: int, frame_height: int) -> List[List[float]]:
         [50.0, float(max(REFERENCE_FRAME_SIZE[1] - 50, 1))],
     ]
     return _scale_roi(base_roi, frame_width, frame_height)
+
+
+def _is_local_file_source(stream_url: str) -> bool:
+    raw = (stream_url or "").strip()
+    if not raw or raw.isdigit() or "://" in raw:
+        return False
+    return Path(raw).expanduser().exists()
 
 
 def _output_fps(source_fps: float) -> float:
@@ -200,9 +392,11 @@ def real_loop():
     requested_video_test = TEST_MODE == "video"
     test_input_exists = bool(TEST_INPUT) and Path(TEST_INPUT).exists()
     is_video_test = requested_video_test and test_input_exists
-    events_enabled = not is_video_test
+    base_events_enabled = not is_video_test
+    events_enabled = base_events_enabled
+    local_file_events_consumed = False
     tracker_mode = "DeepSORT+ReID" if DEEPSORT_AVAILABLE and not FORCE_CENTROID else "CentroidTracker"
-    needs_backend_auth = events_enabled or FACE_REGISTRY_SOURCE == "backend"
+    needs_backend_auth = base_events_enabled or FACE_REGISTRY_SOURCE == "backend"
 
     token = login_token() if needs_backend_auth else None
     model = load_model()
@@ -247,13 +441,17 @@ def real_loop():
     roi_shape: Tuple[int, int] = (0, 0)
     stream_url = TEST_INPUT if is_video_test else (EDGE_STREAM_URL or "")
     area_id = None
+    area_direction_mode = "BOTH"
     visitor_states: Dict[int, Dict[str, Any]] = {}
+    visitor_flow_states: Dict[str, Dict[str, Any]] = {}
     current_date = ""
     last_event_time: Dict[str, float] = {}
     cap = None
     cap_source = ""
     last_frame_id = 0
     processed_frames = 0
+    frame_w = TEST_FRAME_WIDTH
+    frame_h = TEST_FRAME_HEIGHT
     output_writer = None
     output_video_path = None
     backup_recorder = SegmentedVideoRecorder(
@@ -285,6 +483,7 @@ def real_loop():
 
             if today != current_date:
                 visitor_states = {}
+                visitor_flow_states = {}
                 last_event_time = {}
                 current_date = today
                 reset_daily_cache(today)
@@ -308,6 +507,7 @@ def real_loop():
                         if active_area:
                             roi = parse_roi(active_area.get("roi_polygon"))
                             area_id = active_area.get("area_id")
+                            area_direction_mode = (active_area.get("direction_mode") or "BOTH").upper()
 
                 face_recognizer.refresh_registry(
                     get_employee_registry,
@@ -333,6 +533,8 @@ def real_loop():
                 cap = None
                 cap_source = ""
                 last_frame_id = 0
+                events_enabled = base_events_enabled
+                local_file_events_consumed = False
                 backup_recorder.reset(reason="stream source changed")
 
             if cap is None or not cap.isOpened():
@@ -352,6 +554,26 @@ def real_loop():
                     if is_video_test:
                         log.info("Video test input finished.")
                         break
+                    if _is_local_file_source(stream_url) and events_enabled:
+                        finalized = _finalize_open_exit_states(
+                            visitor_states,
+                            visitor_flow_states,
+                            last_event_time,
+                            roi,
+                            frame_w,
+                            frame_h,
+                            area_id,
+                            area_direction_mode,
+                            token,
+                            now_ts,
+                        )
+                        if finalized:
+                            log.info("Finalized %d OUT event(s) before local replay", finalized)
+                        events_enabled = False
+                        local_file_events_consumed = True
+                        log.info(
+                            "Local video source finished once; restarting preview without event posting"
+                        )
                     log.info("Video file ended. Restarting from beginning...")
                     cap.release()
                     cap = None
@@ -438,146 +660,429 @@ def real_loop():
             employee_tracks = 0
             verifying_tracks = 0
 
-            for track_id, track in tracks.items():
-                in_roi_now = point_in_roi(roi, track.centroid[0], track.centroid[1])
-                identity_embedding = _resolve_identity_embedding(face_recognizer, track)
-                fallback_key = update_track_embedding(track_id, identity_embedding, CAMERA_ID, today)
-                classification = face_recognizer.classify_track(frame, track_id, track.bbox)
-                visitor_key = _stable_identity_key(fallback_key, classification)
+            for flow in visitor_flow_states.values():
+                if (
+                    flow.get("inside")
+                    and now_ts - float(flow.get("last_seen_ts", now_ts)) > TRACK_REENTRY_COOLDOWN_SECONDS
+                ):
+                    flow["inside"] = False
+                    flow["expired_without_exit"] = True
 
+            def commit_count_event(
+                direction: str,
+                track_id: int,
+                visitor_key: str,
+                state: Dict[str, Any],
+                classification: Dict[str, Any],
+                reason: str = "",
+            ) -> bool:
+                flow = visitor_flow_states.setdefault(
+                    visitor_key,
+                    {
+                        "inside": False,
+                        "last_in_ts": 0.0,
+                        "last_out_ts": 0.0,
+                        "last_seen_ts": now_ts,
+                    },
+                )
+
+                if direction == "OUT":
+                    if state.get("exit_logged"):
+                        state["pending_entry"] = False
+                        state["entry_logged"] = False
+                        state["direction"] = "OUT"
+                        return True
+
+                    last_track_out_ts = float(state.get("last_track_out_ts", 0.0) or 0.0)
+                    if (
+                        TRACK_SAME_TRACK_OUT_COOLDOWN_SECONDS > 0
+                        and now_ts - last_track_out_ts
+                        < TRACK_SAME_TRACK_OUT_COOLDOWN_SECONDS
+                    ):
+                        state["pending_entry"] = False
+                        state["entry_logged"] = False
+                        state["direction"] = "OUT"
+                        return True
+
+                if (
+                    direction == "IN"
+                    and now_ts < float(flow.get("suppress_in_until", 0.0) or 0.0)
+                ):
+                    state["pending_entry"] = False
+                    state["entry_logged"] = False
+                    state["is_new"] = False
+                    state["direction"] = "OUT"
+                    return True
+
+                if classification.get("person_type") == "EMPLOYEE":
+                    state["pending_entry"] = False
+                    state["entry_logged"] = False
+                    state["is_new"] = False
+                    state["direction"] = "IGNORE"
+                    flow["inside"] = False
+                    return True
+
+                if area_direction_mode not in {"BOTH", direction}:
+                    if direction == "IN":
+                        state["pending_entry"] = False
+                        state["entry_logged"] = True
+                        state["is_new"] = False
+                        state["direction"] = "IN_ROI"
+                        flow["inside"] = True
+                        flow["last_in_ts"] = now_ts
+                    else:
+                        state["entry_logged"] = False
+                        state["exit_logged"] = True
+                        state["direction"] = "OUT"
+                        flow["inside"] = False
+                        flow["last_out_ts"] = now_ts
+                    return True
+
+                debounce_key = f"{visitor_key}_{direction}"
+                if now_ts - last_event_time.get(debounce_key, 0.0) < EVENT_COOLDOWN:
+                    if direction == "IN":
+                        state["pending_entry"] = False
+                        state["entry_logged"] = True
+                        state["is_new"] = False
+                        state["direction"] = "IN_ROI"
+                        flow["inside"] = True
+                    else:
+                        state["entry_logged"] = False
+                        state["exit_logged"] = True
+                        state["direction"] = "OUT"
+                        flow["inside"] = False
+                    return True
+
+                if events_enabled:
+                    result = _send_track_event(
+                        direction,
+                        track_id,
+                        visitor_key,
+                        area_id,
+                        now_time,
+                        avg_confidence,
+                        classification,
+                        token,
+                    )
+                    if not result["success"]:
+                        log.error(
+                            "Failed to send %s event: %s",
+                            direction,
+                            result.get("error", "Unknown"),
+                        )
+                        return False
+                    is_new_unique = result["data"].get("is_new_unique", False)
+                else:
+                    is_new_unique = False
+
+                last_event_time[debounce_key] = now_ts
+                state["pending_entry"] = False
+                if direction == "IN":
+                    state["entry_logged"] = True
+                    state["exit_logged"] = False
+                    state["is_new"] = bool(is_new_unique)
+                    state["direction"] = "IN"
+                    flow["inside"] = True
+                    flow["last_in_ts"] = now_ts
+                else:
+                    state["entry_logged"] = False
+                    state["direction"] = "OUT"
+                    state["exit_logged"] = True
+                    state["last_track_out_ts"] = now_ts
+                    flow["inside"] = False
+                    flow["last_out_ts"] = now_ts
+                    flow["suppress_in_until"] = now_ts + TRACK_REENTRY_COOLDOWN_SECONDS
+                    state["suppress_entry_until"] = flow["suppress_in_until"]
+                flow["last_seen_ts"] = now_ts
+                flow["active_track_id"] = track_id
+                log.info(
+                    "Counted %s event track=%s visitor=%s source=%s reason=%s",
+                    direction,
+                    track_id,
+                    visitor_key[:8],
+                    classification.get("recognition_source"),
+                    reason or "roi",
+                )
+                return True
+
+            for track_id, track in tracks.items():
                 state = visitor_states.setdefault(
                     track_id,
                     {
                         "is_new": False,
                         "direction": "TRACKING",
-                        "visitor_key": visitor_key,
-                        "person_type": classification.get("person_type", "UNKNOWN"),
+                        "visitor_key": "",
+                        "person_type": "UNKNOWN",
+                        "identity_status": "PENDING",
                         "pending_entry": False,
                         "entry_logged": False,
+                        "inside_frames": 0,
+                        "outside_frames": 0,
+                        "exit_zone_frames": 0,
+                        "exit_motion_frames": 0,
+                        "seen_frames": 0,
+                        "missing_frames": 0,
                     },
                 )
-                state.update(
-                    {
-                        "visitor_key": visitor_key,
-                        "person_type": classification.get("person_type", "UNKNOWN"),
-                        "employee_id": classification.get("employee_id"),
-                        "employee_code": classification.get("employee_code"),
-                        "employee_name": classification.get("employee_name"),
-                        "match_score": classification.get("match_score"),
-                    }
-                )
+                detected_now = int(getattr(track, "disappeared", 0) or 0) == 0
 
-                if classification["person_type"] == "EMPLOYEE":
-                    employee_tracks += 1
-                elif classification["person_type"] == "UNKNOWN":
-                    verifying_tracks += 1
-                else:
-                    customer_tracks += 1
+                if detected_now:
+                    point_x, point_y = _track_counting_point(track)
+                    in_roi_now = point_in_roi(roi, point_x, point_y)
+                    identity_embedding = _resolve_identity_embedding(face_recognizer, track)
+                    identity = update_track_identity(track_id, identity_embedding, CAMERA_ID, today)
+                    classification = face_recognizer.classify_track(frame, track_id, track.bbox)
+                    visitor_key = _stable_identity_key(identity["visitor_key"], classification)
+                    previous_bbox = state.get("last_bbox")
+                    previous_centroid = state.get("last_centroid")
+                    previous_bottom = float(previous_bbox[3]) if previous_bbox else None
+                    bottom_delta = (
+                        float(track.bbox[3]) - previous_bottom
+                        if previous_bottom is not None
+                        else 0.0
+                    )
+                    centroid_delta = (
+                        float(track.centroid[1]) - float(previous_centroid[1])
+                        if previous_centroid is not None
+                        else 0.0
+                    )
+                    moving_toward_bottom = (
+                        bottom_delta >= TRACK_EXIT_MIN_DELTA_Y
+                        or centroid_delta >= TRACK_EXIT_MIN_DELTA_Y
+                    )
+                    in_bottom_exit_zone = _bbox_in_bottom_exit_zone(track.bbox, roi, frame_h)
 
-                if (not track.in_roi) and in_roi_now:
-                    state["pending_entry"] = True
+                    previous_key = state.get("visitor_key")
+                    if previous_key and previous_key != visitor_key and previous_key in visitor_flow_states:
+                        old_flow = visitor_flow_states[previous_key]
+                        if old_flow.get("inside"):
+                            visitor_flow_states.setdefault(visitor_key, {}).update(old_flow)
 
-                if in_roi_now and state.get("pending_entry"):
-                    if classification["person_type"] == "UNKNOWN":
-                        state["direction"] = "VERIFY"
+                    state.update(
+                        {
+                            "visitor_key": visitor_key,
+                            "person_type": classification.get("person_type", "UNKNOWN"),
+                            "employee_id": classification.get("employee_id"),
+                            "employee_code": classification.get("employee_code"),
+                            "employee_name": classification.get("employee_name"),
+                            "match_score": classification.get("match_score"),
+                            "recognition_source": classification.get("recognition_source"),
+                            "identity_status": identity.get("identity_status", "PENDING"),
+                            "identity_samples": identity.get("embedding_samples", 0),
+                            "previous_centroid": previous_centroid,
+                            "last_bbox": tuple(track.bbox),
+                            "last_centroid": tuple(track.centroid),
+                            "last_seen_ts": now_ts,
+                            "last_in_roi": in_roi_now,
+                            "missing_frames": 0,
+                        }
+                    )
+                    state["seen_frames"] = int(state.get("seen_frames", 0)) + 1
+                    track_hits = int(getattr(track, "hits", 0) or 0)
+                    state["track_hits"] = track_hits
+                    state["observed_frames"] = max(
+                        int(state.get("seen_frames", 0)),
+                        track_hits,
+                    )
+
+                    if in_roi_now:
+                        state["inside_frames"] = int(state.get("inside_frames", 0)) + 1
+                        state["outside_frames"] = 0
                     else:
-                        debounce_key = f"{visitor_key}_IN"
-                        if now_ts - last_event_time.get(debounce_key, 0.0) >= EVENT_COOLDOWN:
-                            if events_enabled:
-                                result = _send_track_event(
-                                    "IN",
-                                    track_id,
-                                    visitor_key,
-                                    area_id,
-                                    now_time,
-                                    avg_confidence,
-                                    classification,
-                                    token,
-                                )
-                                if result["success"]:
+                        state["outside_frames"] = int(state.get("outside_frames", 0)) + 1
+                        state["inside_frames"] = 0
+
+                    if in_bottom_exit_zone:
+                        state["exit_zone_frames"] = int(state.get("exit_zone_frames", 0)) + 1
+                    else:
+                        state["exit_zone_frames"] = 0
+
+                    if moving_toward_bottom:
+                        state["exit_motion_frames"] = int(state.get("exit_motion_frames", 0)) + 1
+                    else:
+                        state["exit_motion_frames"] = max(
+                            0,
+                            int(state.get("exit_motion_frames", 0)) - 1,
+                        )
+
+                    if classification["person_type"] == "EMPLOYEE":
+                        employee_tracks += 1
+                    elif classification["person_type"] == "UNKNOWN":
+                        verifying_tracks += 1
+                    else:
+                        customer_tracks += 1
+
+                    if visitor_key:
+                        flow = visitor_flow_states.setdefault(
+                            visitor_key,
+                            {
+                                "inside": False,
+                                "last_in_ts": 0.0,
+                                "last_out_ts": 0.0,
+                            },
+                        )
+                        flow["last_seen_ts"] = now_ts
+                        flow["active_track_id"] = track_id
+                    else:
+                        flow = {"inside": False}
+
+                    ready_to_count = (
+                        classification.get("person_type") != "UNKNOWN"
+                        and _identity_ready(identity)
+                        and bool(visitor_key)
+                    )
+                    ready_to_exit = (
+                        classification.get("person_type") != "UNKNOWN"
+                        and bool(visitor_key)
+                        and (
+                            bool(state.get("entry_logged"))
+                            or (
+                                TRACK_EXIT_ALLOW_WITHOUT_ENTRY
+                                and int(state.get("observed_frames", 0))
+                                >= TRACK_EXIT_WITHOUT_ENTRY_MIN_FRAMES
+                            )
+                        )
+                    )
+                    bottom_exit_ready = (
+                        ready_to_exit
+                        and int(state.get("exit_zone_frames", 0)) >= TRACK_EXIT_BOTTOM_CONFIRM_FRAMES
+                        and int(state.get("exit_motion_frames", 0)) >= 1
+                    )
+                    if in_bottom_exit_zone and not state.get("exit_candidate_logged"):
+                        log.debug(
+                            (
+                                "Exit candidate track=%s visitor=%s ready=%s seen=%s "
+                                "hits=%s observed=%s entry=%s motion=%s zone=%s "
+                                "bottom_delta=%.1f centroid_delta=%.1f"
+                            ),
+                            track_id,
+                            visitor_key[:8],
+                            ready_to_exit,
+                            state.get("seen_frames", 0),
+                            state.get("track_hits", 0),
+                            state.get("observed_frames", 0),
+                            state.get("entry_logged"),
+                            state.get("exit_motion_frames", 0),
+                            state.get("exit_zone_frames", 0),
+                            bottom_delta,
+                            centroid_delta,
+                        )
+                        state["exit_candidate_logged"] = True
+
+                    if classification.get("person_type") == "EMPLOYEE":
+                        state["pending_entry"] = False
+                        state["entry_logged"] = False
+                        state["is_new"] = False
+                        state["direction"] = "IGNORE"
+                    elif bottom_exit_ready:
+                        commit_count_event(
+                            "OUT",
+                            track_id,
+                            visitor_key,
+                            state,
+                            classification,
+                            reason="exit_gate_motion",
+                        )
+                    elif (
+                        ready_to_exit
+                        and in_bottom_exit_zone
+                        and int(state.get("exit_motion_frames", 0)) >= 1
+                    ):
+                        state["pending_entry"] = False
+                        state["direction"] = "EXITING"
+                    elif in_roi_now and not ready_to_count and not state.get("entry_logged"):
+                        state["pending_entry"] = True
+                        state["direction"] = "VERIFY"
+                    elif in_roi_now:
+                        if not state.get("entry_logged"):
+                            if int(state.get("inside_frames", 0)) >= TRACK_ENTRY_CONFIRM_FRAMES:
+                                if flow.get("inside"):
                                     state["pending_entry"] = False
                                     state["entry_logged"] = True
-                                    last_event_time[debounce_key] = now_ts
-                                    if classification["person_type"] == "EMPLOYEE":
-                                        state["is_new"] = False
-                                        state["direction"] = "IGNORE"
-                                    else:
-                                        state["is_new"] = result["data"].get("is_new_unique", False)
-                                        state["direction"] = "IN"
+                                    state["is_new"] = False
+                                    state["direction"] = "IN_ROI"
                                 else:
-                                    log.error("Failed to send IN event: %s", result.get("error", "Unknown"))
+                                    commit_count_event("IN", track_id, visitor_key, state, classification)
                             else:
-                                state["pending_entry"] = False
-                                state["entry_logged"] = True
-                                state["direction"] = (
-                                    "IGNORE" if classification["person_type"] == "EMPLOYEE" else "IN"
-                                )
-                                last_event_time[debounce_key] = now_ts
-                        else:
-                            state["pending_entry"] = False
-                            state["entry_logged"] = False
-                            state["direction"] = (
-                                "IGNORE"
-                                if classification["person_type"] == "EMPLOYEE"
-                                else "IN"
+                                state["pending_entry"] = True
+                                state["direction"] = "VERIFY"
+                        elif state.get("direction") not in {"IN", "OUT"}:
+                            state["direction"] = "IN_ROI"
+                    elif state.get("entry_logged"):
+                        state["pending_entry"] = False
+                        if int(state.get("outside_frames", 0)) >= TRACK_EXIT_CONFIRM_FRAMES:
+                            commit_count_event(
+                                "OUT",
+                                track_id,
+                                visitor_key,
+                                state,
+                                classification,
+                                reason="roi_leave",
                             )
+                        elif state.get("direction") not in {"IN", "OUT"}:
+                            state["direction"] = "IN_ROI"
+                    else:
+                        state["pending_entry"] = False
+                        state["direction"] = "TRACKING"
 
-                elif track.in_roi and (not in_roi_now):
-                    state["pending_entry"] = False
-                    if state.get("entry_logged"):
-                        debounce_key = f"{visitor_key}_OUT"
-                        if now_ts - last_event_time.get(debounce_key, 0.0) >= EVENT_COOLDOWN:
-                            if events_enabled:
-                                result = _send_track_event(
-                                    "OUT",
-                                    track_id,
-                                    visitor_key,
-                                    area_id,
-                                    now_time,
-                                    avg_confidence,
-                                    classification,
-                                    token,
-                                )
-                                if result["success"]:
-                                    last_event_time[debounce_key] = now_ts
-                                    state["entry_logged"] = False
-                                    state["direction"] = (
-                                        "IGNORE"
-                                        if classification["person_type"] == "EMPLOYEE"
-                                        else "OUT"
-                                    )
-                                else:
-                                    log.error("Failed to send OUT event: %s", result.get("error", "Unknown"))
-                            else:
-                                last_event_time[debounce_key] = now_ts
-                                state["entry_logged"] = False
-                                state["direction"] = (
-                                    "IGNORE" if classification["person_type"] == "EMPLOYEE" else "OUT"
-                                )
-                        else:
-                            state["entry_logged"] = False
-                            state["direction"] = (
-                                "IGNORE"
-                                if classification["person_type"] == "EMPLOYEE"
-                                else "OUT"
-                            )
+                    track.in_roi = in_roi_now
+                else:
+                    state["missing_frames"] = int(state.get("missing_frames", 0)) + 1
+                    visitor_key = state.get("visitor_key", "")
+                    classification = _classification_from_state(state)
+                    track.in_roi = bool(state.get("last_in_roi", track.in_roi))
+                    if visitor_key and visitor_key in visitor_flow_states:
+                        visitor_flow_states[visitor_key]["last_seen_ts"] = now_ts
 
-                elif in_roi_now:
-                    if state.get("pending_entry"):
-                        state["direction"] = "VERIFY"
-                    elif classification["person_type"] == "EMPLOYEE":
-                        state["direction"] = "IGNORE"
-                    elif classification["person_type"] == "UNKNOWN":
-                        state["direction"] = "VERIFY"
-                    elif state.get("direction") not in {"IN", "OUT"}:
-                        state["direction"] = "IN_ROI"
-                elif classification["person_type"] == "UNKNOWN":
-                    state["direction"] = "TRACKING"
+                    last_bbox = state.get("last_bbox")
+                    if (
+                        _state_can_exit(state)
+                        and last_bbox
+                        and int(state.get("missing_frames", 0)) >= TRACK_EXIT_CONFIRM_FRAMES
+                        and (
+                            _bbox_near_frame_edge(last_bbox, frame_w, frame_h)
+                            or _bbox_in_bottom_exit_zone(last_bbox, roi, frame_h)
+                        )
+                    ):
+                        commit_count_event(
+                            "OUT",
+                            track_id,
+                            visitor_key,
+                            state,
+                            classification,
+                            reason="predicted_track_lost_near_exit",
+                        )
 
                 visitor_states[track_id] = state
-                track.in_roi = in_roi_now
+
+            lost_track_ids = [tid for tid in list(visitor_states.keys()) if tid not in active_track_ids]
+            for lost_track_id in lost_track_ids:
+                state = visitor_states.get(lost_track_id, {})
+                visitor_key = state.get("visitor_key", "")
+                last_bbox = state.get("last_bbox")
+                should_finalize_exit = (
+                    _state_can_exit(state)
+                    and last_bbox
+                    and (
+                        _bbox_near_frame_edge(last_bbox, frame_w, frame_h)
+                        or _bbox_in_bottom_exit_zone(last_bbox, roi, frame_h)
+                        or int(state.get("outside_frames", 0)) >= TRACK_EXIT_CONFIRM_FRAMES
+                        or not bool(state.get("last_in_roi", True))
+                    )
+                )
+                if should_finalize_exit:
+                    commit_count_event(
+                        "OUT",
+                        lost_track_id,
+                        visitor_key,
+                        state,
+                        _classification_from_state(state),
+                        reason="track_lost_near_exit",
+                    )
+                del visitor_states[lost_track_id]
 
             draw_roi_polygon(display_frame, roi)
+            draw_exit_gate(display_frame, _exit_gate_y(roi, frame_h))
             draw_bounding_boxes(display_frame, tracks, visitor_states)
 
             info_lines = [
@@ -591,6 +1096,8 @@ def real_loop():
                 info_lines.append(
                     f"Video test: frame_step={TEST_FRAME_STEP} | identity={IDENTITY_MODE}"
                 )
+            elif local_file_events_consumed:
+                info_lines.append("Local replay: events paused after first pass")
             if face_recognizer.enabled:
                 if face_recognizer.available:
                     info_lines.append(f"Face registry: {face_recognizer.registry_size} employee(s)")
