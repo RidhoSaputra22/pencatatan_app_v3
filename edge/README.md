@@ -17,8 +17,9 @@ Kamera (webcam/RTSP/HTTP)
 [Backend API] ◄── kirim event kunjungan
 ```
 
-**Catatan**: Edge worker langsung membaca webcam (EDGE_STREAM_URL=0).
-Tidak perlu menjalankan `rstp/rtsp_webcam_server.py` terpisah.
+**Catatan**: Sumber kamera diatur dari menu Konfigurasi dashboard
+(`EDGE_STREAM_URL`) dan disimpan di `backend/storage/runtime_config.json`.
+Untuk webcam langsung, isi nilainya dengan `0`.
 
 ## Struktur Folder
 
@@ -27,7 +28,7 @@ edge/
 ├── worker.py              # Entry point utama (36 lines)
 ├── core/                  # Core modules
 │   ├── __init__.py
-│   ├── config.py          # Environment configuration
+│   ├── config.py          # Bootstrap environment configuration
 │   ├── api_client.py      # Backend API communication
 │   ├── streaming.py       # WebRTC video server + MJPEG fallback
 │   ├── tracker.py         # CentroidTracker class
@@ -46,12 +47,11 @@ edge/
 - Memilih mode (fake/real) dan menjalankan loop yang sesuai
 
 ### 2. `core/config.py` - Configuration
-- Load environment variables dari `.env`
+- Load bootstrap variables dari `.env`
+- Runtime tuning dipolling dari backend (`/api/admin/runtime-config`)
 - Menyediakan konstanta konfigurasi:
   - Mode (FAKE/REAL)
   - Camera ID
-  - YOLOv5 parameters
-  - Tracking parameters
   - Backend API URLs
 
 ### 3. `core/api_client.py` - API Communication
@@ -102,7 +102,7 @@ otomatis menonaktifkan MKLDNN untuk percobaan ulang dan fallback ke
 CentroidTracker bila DeepSORT tetap gagal. Worker tetap jalan, tetapi akurasi
 re-identification lebih rendah dibanding DeepSORT.
 
-Tuning ReID body embedding sekarang mendukung beberapa knob tambahan lewat `.env`:
+Tuning ReID body embedding sekarang dikelola dari dashboard:
 
 - `REID_MATCH_THRESHOLD`
 - `REID_MIN_TRACK_FRAMES`
@@ -116,11 +116,12 @@ Default baru menahan identity lock beberapa frame agar `visitor_key` tidak mudah
 
 Mode REAL dengan YOLOv5:
 ```bash
-# Di .env
+# Di .env hanya mode bootstrap
 EDGE_MODE=real
-EDGE_STREAM_URL=0          # webcam langsung
-# EDGE_STREAM_URL=rtsp://ip:port/stream   # IP camera
 ```
+
+Sumber kamera (`EDGE_STREAM_URL`) diisi dari dashboard, misalnya `0` untuk
+webcam langsung atau `rtsp://ip:port/stream` untuk IP camera.
 
 ## Keuntungan Refactoring
 

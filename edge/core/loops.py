@@ -253,6 +253,34 @@ def _apply_runtime_config(payload: Dict[str, Any], model: Any) -> Dict[str, Any]
             ),
         )
 
+    if "YOLO_BACKEND" in values:
+        yolo_backend = str(values["YOLO_BACKEND"] or "yolov5").strip().lower() or "yolov5"
+        mark(
+            "YOLO_BACKEND",
+            _set_across_modules("YOLO_BACKEND", yolo_backend, (config_module, detection_module, streaming_module)),
+        )
+
+    if "YOLOV5_WEIGHTS" in values:
+        raw_weights = str(values["YOLOV5_WEIGHTS"] or "./edge/yolov5s.pt").strip() or "./edge/yolov5s.pt"
+        weights = config_module.resolve_existing_project_path(raw_weights, "")
+        mark(
+            "YOLOV5_WEIGHTS",
+            _set_across_modules("WEIGHTS", weights, (config_module, detection_module, streaming_module)),
+        )
+
+    if "YOLO_REPO" in values:
+        repo_raw = str(values["YOLO_REPO"] or "").strip()
+        repo_path = config_module.resolve_project_path(repo_raw) if repo_raw else ""
+        _set_module_global(config_module, "REPO_RAW", repo_raw)
+        mark("YOLO_REPO", _set_across_modules("REPO", repo_path, (config_module, detection_module)))
+
+    if "YOLO_DEVICE" in values:
+        yolo_device = str(values["YOLO_DEVICE"] or "auto").strip() or "auto"
+        mark(
+            "YOLO_DEVICE",
+            _set_across_modules("DEVICE", yolo_device, (config_module, detection_module, streaming_module)),
+        )
+
     yolo_conf = None
     if "YOLO_CONF" in values:
         yolo_conf = _runtime_float(values["YOLO_CONF"], detection_module.CONF_TH, minimum=0.0, maximum=1.0)
@@ -419,6 +447,17 @@ def _apply_runtime_config(payload: Dict[str, Any], model: Any) -> Dict[str, Any]
             _set_loop_global(global_name, parsed)
         if previous != parsed:
             changed.append(env_key)
+
+    if "WITH_FACE_RECOGNITION" in values:
+        face_enabled = _runtime_bool(values["WITH_FACE_RECOGNITION"], face_module.FACE_RECOGNITION_ENABLED)
+        mark(
+            "WITH_FACE_RECOGNITION",
+            _set_across_modules(
+                "FACE_RECOGNITION_ENABLED",
+                face_enabled,
+                (config_module, face_module, streaming_module),
+            ),
+        )
 
     if "FACE_REGISTRY_SOURCE" in values:
         registry_source = str(values["FACE_REGISTRY_SOURCE"] or "backend").strip().lower() or "backend"
@@ -916,8 +955,11 @@ def real_loop():
     needs_backend_auth = True
 
     token = login_token() if needs_backend_auth else None
+    startup_runtime_config = get_runtime_config(token)
+    _apply_runtime_config(startup_runtime_config, None)
     model = load_model()
     face_recognizer = EmployeeFaceRecognizer()
+    _apply_runtime_config(startup_runtime_config, model)
 
     # log.info("Running in REAL mode (%s + employee filtering)", tracker_mode)
     log.info(

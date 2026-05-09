@@ -1,12 +1,12 @@
-"""Runtime configuration metadata and .env persistence helpers."""
+"""Runtime configuration metadata and JSON persistence helpers."""
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
-ENV_PATH = PROJECT_DIR / ".env"
+CONFIG_PATH = PROJECT_DIR / "backend" / "storage" / "runtime_config.json"
 
 
 class RuntimeConfigError(ValueError):
@@ -603,60 +603,14 @@ for item in CONFIG_ITEMS:
         CONFIG_BY_KEY[alias] = item
 
 
-def _split_inline_comment(raw: str) -> Tuple[str, str]:
-    in_single = False
-    in_double = False
-    for index, char in enumerate(raw):
-        if char == "'" and not in_double:
-            in_single = not in_single
-        elif char == '"' and not in_single:
-            in_double = not in_double
-        elif char == "#" and not in_single and not in_double:
-            if index == 0 or raw[index - 1].isspace():
-                return raw[:index].rstrip(), raw[index:]
-    return raw.rstrip(), ""
-
-
-def _strip_quotes(value: str) -> str:
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-        return value[1:-1]
-    return value
-
-
-def _parse_env_lines(lines: List[str]) -> Dict[str, str]:
-    values: Dict[str, str] = {}
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in line:
-            continue
-        key, raw_value = line.split("=", 1)
-        key = key.strip()
-        if not key:
-            continue
-        value_part, _ = _split_inline_comment(raw_value.rstrip("\n"))
-        values[key] = _strip_quotes(value_part)
-    return values
-
-
-def _read_env_lines() -> List[str]:
-    if not ENV_PATH.exists():
-        return []
-    return ENV_PATH.read_text(encoding="utf-8").splitlines(keepends=True)
-
-
-def read_env_values() -> Dict[str, str]:
-    return _parse_env_lines(_read_env_lines())
-
-
 def _item_keys(item: Dict[str, Any]) -> List[str]:
     return [item["key"], *item.get("aliases", [])]
 
 
-def _item_value(item: Dict[str, Any], env_values: Dict[str, str]) -> str:
+def _item_value(item: Dict[str, Any], stored_values: Dict[str, str]) -> str:
     for key in _item_keys(item):
-        if key in env_values:
-            return env_values[key]
+        if key in stored_values:
+            return stored_values[key]
     return str(item.get("default", ""))
 
 
@@ -720,63 +674,52 @@ def _coerce_value(item: Dict[str, Any], raw_value: Any) -> str:
     return raw
 
 
-def _env_target_keys(item: Dict[str, Any], env_values: Dict[str, str]) -> List[str]:
-    present = [key for key in _item_keys(item) if key in env_values]
-    return present or [item["key"]]
+def _default_values() -> Dict[str, str]:
+    return {item["key"]: str(item.get("default", "")) for item in CONFIG_ITEMS}
 
 
-def _format_env_value(value: str) -> str:
-    if "\n" in value:
-        value = value.replace("\n", "\\n")
-    if value and (value[0].isspace() or value[-1].isspace() or "#" in value):
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-        return f'"{escaped}"'
-    return value
+def _read_config_values() -> Dict[str, str]:
+    if not CONFIG_PATH.exists():
+        return {}
 
+    try:
+        payload = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeConfigError(f"File runtime config JSON tidak valid: {exc.msg}") from None
 
-def _write_env_values(updates: Dict[str, str]) -> None:
-    lines = _read_env_lines()
-    seen: set[str] = set()
-    next_lines: List[str] = []
+    if isinstance(payload, dict) and isinstance(payload.get("values"), dict):
+        raw_values = payload["values"]
+    elif isinstance(payload, dict):
+        raw_values = payload
+    else:
+        raise RuntimeConfigError("File runtime config harus berupa object JSON")
 
-    for line in lines:
-        if "=" not in line or line.lstrip().startswith("#"):
-            next_lines.append(line)
+    values: Dict[str, str] = {}
+    for raw_key, raw_value in raw_values.items():
+        item = CONFIG_BY_KEY.get(str(raw_key))
+        if item is None:
             continue
+        values[item["key"]] = _coerce_value(item, raw_value)
+    return values
 
-        key, raw_value = line.split("=", 1)
-        stripped_key = key.strip()
-        if stripped_key not in updates:
-            next_lines.append(line)
-            continue
 
-        _, comment = _split_inline_comment(raw_value.rstrip("\n"))
-        newline = "\n" if line.endswith("\n") else ""
-        comment_part = f" {comment.strip()}" if comment.strip() else ""
-        next_lines.append(f"{stripped_key}={_format_env_value(updates[stripped_key])}{comment_part}{newline}")
-        seen.add(stripped_key)
-
-    missing = [key for key in updates if key not in seen]
-    if missing:
-        if next_lines and not next_lines[-1].endswith("\n"):
-            next_lines[-1] = f"{next_lines[-1]}\n"
-        if next_lines and next_lines[-1].strip():
-            next_lines.append("\n")
-        next_lines.append("# Runtime configuration managed from dashboard\n")
-        for key in missing:
-            next_lines.append(f"{key}={_format_env_value(updates[key])}\n")
-
-    ENV_PATH.write_text("".join(next_lines), encoding="utf-8")
+def _write_config_values(values: Dict[str, str]) -> None:
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ordered_values = {item["key"]: values[item["key"]] for item in CONFIG_ITEMS if item["key"] in values}
+    payload = {"values": ordered_values}
+    temp_path = CONFIG_PATH.with_suffix(f"{CONFIG_PATH.suffix}.tmp")
+    temp_path.write_text(f"{json.dumps(payload, indent=2, sort_keys=False)}\n", encoding="utf-8")
+    temp_path.replace(CONFIG_PATH)
 
 
 def load_runtime_config() -> Dict[str, Any]:
-    env_values = read_env_values()
-    env_mtime = ENV_PATH.stat().st_mtime if ENV_PATH.exists() else None
+    stored_values = _read_config_values()
+    config_mtime = CONFIG_PATH.stat().st_mtime if CONFIG_PATH.exists() else None
     items: List[Dict[str, Any]] = []
     values: Dict[str, str] = {}
 
     for item in CONFIG_ITEMS:
-        current_value = _item_value(item, env_values)
+        current_value = _item_value(item, stored_values)
         values[item["key"]] = current_value
         items.append(
             {
@@ -789,8 +732,9 @@ def load_runtime_config() -> Dict[str, Any]:
         )
 
     return {
-        "env_path": str(ENV_PATH),
-        "env_mtime": env_mtime,
+        "storage_driver": "json",
+        "config_path": str(CONFIG_PATH),
+        "config_mtime": config_mtime,
         "groups": CONFIG_GROUPS,
         "items": items,
         "values": values,
@@ -801,8 +745,9 @@ def save_runtime_config(values: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(values, dict):
         raise RuntimeConfigError("Payload values harus berupa object")
 
-    env_values = read_env_values()
-    updates: Dict[str, str] = {}
+    current_values = _default_values()
+    current_values.update(_read_config_values())
+    next_values = dict(current_values)
     changed_items: List[Dict[str, Any]] = []
 
     for incoming_key, raw_value in values.items():
@@ -811,10 +756,8 @@ def save_runtime_config(values: Dict[str, Any]) -> Dict[str, Any]:
             raise RuntimeConfigError(f"Config {incoming_key} tidak diizinkan")
 
         coerced = _coerce_value(item, raw_value)
-        current_value = _item_value(item, env_values)
-
-        for target_key in _env_target_keys(item, env_values):
-            updates[target_key] = coerced
+        current_value = _item_value(item, current_values)
+        next_values[item["key"]] = coerced
 
         if coerced != current_value:
             changed_items.append(
@@ -826,8 +769,8 @@ def save_runtime_config(values: Dict[str, Any]) -> Dict[str, Any]:
                 }
             )
 
-    if updates:
-        _write_env_values(updates)
+    if values:
+        _write_config_values(next_values)
 
     config = load_runtime_config()
     config.update(

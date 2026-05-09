@@ -78,7 +78,8 @@ Sistem monitoring jumlah pengunjung perpustakaan berbasis CCTV dengan YOLOv5 + t
 │   └── package.json
 ├── rstp/              # (OPSIONAL) Webcam HTTP relay server
 │   └── rtsp_webcam_server.py
-└── .env               # Semua konfigurasi
+├── backend/storage/runtime_config.json  # Tuning runtime dari dashboard
+└── .env               # Bootstrap, secret, dan endpoint service
 ```
 
 ## Cara Menjalankan (Manual, tanpa Docker)
@@ -111,7 +112,7 @@ python worker.py
 ```
 
 Edge worker akan:
-- Baca kamera dari `EDGE_STREAM_URL` (default: webcam `0`)
+- Baca kamera dari runtime config `EDGE_STREAM_URL`, lalu fallback ke stream kamera di database jika kosong
 - Deteksi + tracking manusia
 - Kirim event ke backend
 - Publish hasil overlay ke browser via WebRTC (`POST /webrtc/offer`)
@@ -127,52 +128,44 @@ npm run dev
 
 Frontend: http://localhost:3000
 
-## Konfigurasi (.env)
+## Konfigurasi
+
+`.env` dipakai untuk bootstrap dan secret saja: database, JWT, akun awal,
+alamat service, port, dan kredensial edge. Tuning YOLO, tracking, ReID, stream,
+dan face filtering disimpan di `backend/storage/runtime_config.json` lewat menu
+**Konfigurasi** di dashboard.
 
 ```env
-# Backend
+# Backend bootstrap
 APP_ENV=dev
 JWT_SECRET=your-secret-key
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=admin123
 DATABASE_URL=sqlite:///./visitors.db
 
-# Edge — Sumber kamera
+# Edge bootstrap
 EDGE_MODE=real
 EDGE_CAMERA_ID=1
-EDGE_STREAM_URL=0        # "0" = webcam langsung, "rtsp://..." = IP cam
 EDGE_STREAM_PORT=5000    # Port signaling WebRTC + MJPEG fallback
 EDGE_WEBRTC_ENABLED=true
 EDGE_WEBRTC_ICE_SERVERS=[{"urls":"stun:stun.l.google.com:19302"}]
-EDGE_RECORDING_ENABLED=true
-EDGE_RECORDING_SEGMENT_MINUTES=10
-EDGE_RECORDING_OUTPUT_DIR=./backend/storage/footage
 BACKEND_URL=http://localhost:8000
 
-# Face recognition untuk filter pegawai
-FACE_RECOGNITION_ENABLED=true
+# Face model bootstrap
 INSIGHTFACE_MODEL_NAME=buffalo_l
 INSIGHTFACE_DET_SIZE=640
-EMPLOYEE_MATCH_THRESHOLD=0.45
 
 # Frontend
-NEXT_PUBLIC_API_BASE=http://localhost:8000
-NEXT_PUBLIC_WEBRTC_SIGNAL_URL=http://localhost:5000/webrtc/offer
-NEXT_PUBLIC_STREAM_URL=http://localhost:5000/video_feed
+FRONTEND_PORT=3000
 ```
 
-### Tuning Live Stream Yang Direkomendasikan
+### Tuning Runtime
 
-Untuk preview dashboard yang lebih smooth, pakai kombinasi berikut:
-
-```env
-EDGE_STREAM_MAX_FPS=15
-EDGE_PROCESSING_MAX_FPS=12
-YOLOV5_IMG_SIZE=512
-YOLOV5_WEIGHTS=./edge/yolo26n.pt
-FACE_DETECTION_FRAME_INTERVAL=3
-NEXT_PUBLIC_STREAM_HEALTH_INTERVAL_MS=15000
-```
+Ubah nilai seperti `EDGE_STREAM_URL`, `EDGE_PROCESSING_MAX_FPS`,
+`EDGE_STREAM_MAX_FPS`, `YOLO_CONF`, `YOLOV5_WEIGHTS`, tracking, ReID, dan face
+filtering dari dashboard. Backend menyimpan perubahan ke
+`backend/storage/runtime_config.json`; edge worker mengambilnya lewat endpoint
+`/api/admin/runtime-config`.
 
 Catatan:
 - `EDGE_PROCESSING_MAX_FPS` membatasi ritme inferensi/tracking agar CPU/GPU tidak penuh terus.
@@ -182,19 +175,19 @@ Catatan:
 ## Kamera: Webcam vs RTSP
 
 ### Webcam Langsung (paling mudah)
-```env
+```text
 EDGE_STREAM_URL=0
 ```
-Edge worker langsung buka webcam index 0. **Tidak perlu menjalankan file lain.**
+Isi `EDGE_STREAM_URL` di dashboard dengan `0`. Edge worker langsung membuka webcam index 0.
 
 ### IP Camera (RTSP)
-```env
+```text
 EDGE_STREAM_URL=rtsp://192.168.1.100:554/stream
 ```
 
 ### HTTP Relay (opsional, kasus khusus)
 Jika kamera di PC lain, jalankan `rstp/rtsp_webcam_server.py` di PC kamera:
-```env
+```text
 EDGE_STREAM_URL=http://192.168.1.50:8081/video
 ```
 

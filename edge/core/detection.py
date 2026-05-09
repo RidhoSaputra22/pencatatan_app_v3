@@ -163,7 +163,7 @@ def load_ultralytics_model():
 # ---------------------------------------------------------------------------
 
 def load_model():
-    """Load the YOLO model selected by YOLO_BACKEND env variable.
+    """Load the YOLO model selected by the active runtime config.
 
     YOLO_BACKEND=yolov5       → YOLOv5 via torch.hub  (default)
     YOLO_BACKEND=ultralytics  → YOLOv8/v9/v10/v11 via ultralytics package

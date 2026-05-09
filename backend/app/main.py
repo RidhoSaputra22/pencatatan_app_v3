@@ -1290,7 +1290,7 @@ def reset_daily_database(
 
 @app.get("/api/admin/runtime-config")
 def get_runtime_config(_: User = Depends(require_role("ADMIN"))):
-    """Read whitelisted runtime configuration from .env."""
+    """Read whitelisted runtime configuration from JSON storage."""
     return load_runtime_config()
 
 
@@ -1299,7 +1299,7 @@ def update_runtime_config(
     payload: RuntimeConfigUpdate,
     _: User = Depends(require_role("ADMIN")),
 ):
-    """Persist whitelisted runtime configuration to .env."""
+    """Persist whitelisted runtime configuration to JSON storage."""
     try:
         return save_runtime_config(payload.values)
     except RuntimeConfigError as exc:

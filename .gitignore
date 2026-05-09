@@ -77,6 +77,8 @@ snapshots/
 videos/
 backend/storage/footage/
 backend/storage/recording_previews/
+backend/storage/runtime_config.json
+backend/storage/runtime_config.json.tmp
 test/output/
 # *.mp4
 *.avi
@@ -163,4 +165,3 @@ yolo_lab/*
 !frontend/app/(protected)/recordings/page.js
 !frontend/components/recordings/
 !frontend/components/recordings/RecordingLibrary.js
-

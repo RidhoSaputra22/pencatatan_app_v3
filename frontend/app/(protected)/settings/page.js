@@ -31,6 +31,16 @@ function fieldStep(item) {
   return undefined;
 }
 
+function fieldSurfaceClass(changed) {
+  return [
+    "group flex min-h-14 items-center overflow-hidden rounded-md border bg-base-100/80 shadow-sm transition",
+    changed
+      ? "border-primary/70 ring-1 ring-primary/20"
+      : "border-base-300/90 hover:border-base-content/20",
+    "focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/25",
+  ].join(" ");
+}
+
 function InfoTooltip({ text, aliases = [] }) {
   if (!text && !aliases.length) return null;
 
@@ -77,61 +87,68 @@ function ConfigField({ item, value, changed, onChange }) {
   let control = null;
   if (item.type === "bool") {
     control = (
-      <label className="flex h-12 items-center justify-between rounded-md border border-base-300 bg-base-100 px-4">
-        <span className="text-sm text-base-content/70">
+      <label className={fieldSurfaceClass(changed)}>
+        <span className="flex min-w-0 flex-1 items-center px-4 text-sm font-medium text-base-content/75">
           {isTruthy(value) ? "Aktif" : "Nonaktif"}
         </span>
-        <input
-          id={inputId}
-          type="checkbox"
-          className="toggle toggle-primary"
-          checked={isTruthy(value)}
-          onChange={(event) => onChange(item.key, event.target.checked ? "true" : "false")}
-        />
+        <span className="flex h-full items-center border-l border-base-300/80 bg-base-200/60 px-4">
+          <input
+            id={inputId}
+            type="checkbox"
+            className="toggle toggle-primary"
+            checked={isTruthy(value)}
+            onChange={(event) => onChange(item.key, event.target.checked ? "true" : "false")}
+          />
+        </span>
       </label>
     );
   } else if (item.type === "select") {
     control = (
-      <select
-        id={inputId}
-        className="select select-bordered w-full"
-        value={value ?? ""}
-        onChange={(event) => onChange(item.key, event.target.value)}
-      >
-        {(item.options || []).map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+      <div className={fieldSurfaceClass(changed)}>
+        <select
+          id={inputId}
+          className="select w-full flex-1 border-0 bg-transparent pl-4 pr-4 text-base shadow-none outline-none focus:outline-none focus:ring-0"
+          value={value ?? ""}
+          onChange={(event) => onChange(item.key, event.target.value)}
+        >
+          {(item.options || []).map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </div>
     );
   } else {
     const isNumber = item.type === "int" || item.type === "float";
     control = (
-      <input
-        id={inputId}
-        type={isNumber ? "number" : "text"}
-        min={item.min}
-        max={item.max}
-        step={fieldStep(item)}
-        className="input input-bordered w-full"
-        value={value ?? ""}
-        onChange={(event) => onChange(item.key, event.target.value)}
-      />
+      <div className={fieldSurfaceClass(changed)}>
+        <input
+          id={inputId}
+          type={isNumber ? "number" : "text"}
+          min={item.min}
+          max={item.max}
+          step={fieldStep(item)}
+          className={[
+            "input w-full flex-1 border-0 bg-transparent pl-4 shadow-none outline-none focus:outline-none focus:ring-0",
+            item.unit ? "pr-3" : "pr-4",
+          ].join(" ")}
+          value={value ?? ""}
+          onChange={(event) => onChange(item.key, event.target.value)}
+        />
+        {item.unit && (
+          <span className="flex h-full shrink-0 items-center border-l border-base-300/80 bg-base-200/60 px-3 text-xs font-semibold uppercase tracking-[0.08em] text-base-content/55">
+            {item.unit}
+          </span>
+        )}
+      </div>
     );
   }
 
   return (
     <div className="form-control min-w-0">
       {commonLabel}
-      <div className="flex min-w-0 items-center gap-2">
-        <div className="min-w-0 flex-1">{control}</div>
-        {item.unit && (
-          <span className="w-14 shrink-0 text-xs font-semibold text-base-content/50">
-            {item.unit}
-          </span>
-        )}
-      </div>
+      <div className="min-w-0">{control}</div>
     </div>
   );
 }
@@ -280,8 +297,10 @@ export default function SettingsPage() {
       <Card compact className="mb-5">
         <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
           <div>
-            <div className="text-xs font-semibold uppercase text-base-content/40">File env</div>
-            <div className="mt-1 break-all font-mono text-xs">{config?.env_path || "-"}</div>
+            <div className="text-xs font-semibold uppercase text-base-content/40">
+              File config {config?.storage_driver ? `(${config.storage_driver})` : ""}
+            </div>
+            <div className="mt-1 break-all font-mono text-xs">{config?.config_path || "-"}</div>
           </div>
           <div>
             <div className="text-xs font-semibold uppercase text-base-content/40">Perubahan</div>

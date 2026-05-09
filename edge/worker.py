@@ -12,7 +12,7 @@ Catatan arsitektur:
   - Frame hasil proses dipublish sebagai WebRTC video track
   - MJPEG tetap tersedia sebagai fallback/ROI editor
   - TIDAK perlu menjalankan rtsp_webcam_server.py terpisah
-    jika EDGE_STREAM_URL di-set ke index webcam (misal "0")
+    jika EDGE_STREAM_URL di runtime config di-set ke index webcam (misal "0")
 """
 import threading
 import time

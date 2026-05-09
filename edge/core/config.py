@@ -158,6 +158,10 @@ def _resolved_existing_path(preferred: str, fallback: str = "") -> str:
     return str(preferred_path)
 
 
+def resolve_existing_project_path(preferred: str, fallback: str = "") -> str:
+    return _resolved_existing_path(preferred, fallback)
+
+
 # App environment — controls log verbosity (dev=DEBUG, else INFO)
 APP_ENV = env("APP_ENV", "production").strip().lower()
 
@@ -181,13 +185,13 @@ CAMERA_ID = env_int_required("EDGE_CAMERA_ID")
 
 # Timing configuration
 POST_INTERVAL = env_int_required("EDGE_POST_INTERVAL_SECONDS")
-CONFIG_REFRESH = env_int_required("EDGE_CONFIG_REFRESH_SECONDS")
+CONFIG_REFRESH = max(1, env_int("EDGE_CONFIG_REFRESH_SECONDS", 30))
 
 # Stream configuration
 EDGE_STREAM_URL = env("EDGE_STREAM_URL", "").strip()
 EDGE_STREAM_HOST = env_required("EDGE_STREAM_HOST")
 EDGE_STREAM_PORT = env_int_required("EDGE_STREAM_PORT")
-EDGE_STREAM_JPEG_QUALITY = max(10, min(95, env_int_required("EDGE_STREAM_JPEG_QUALITY")))
+EDGE_STREAM_JPEG_QUALITY = max(10, min(95, env_int("EDGE_STREAM_JPEG_QUALITY", 65)))
 EDGE_STREAM_MAX_FPS = max(0.0, env_float("EDGE_STREAM_MAX_FPS", 0.0))
 EDGE_PROCESSING_MAX_FPS = max(0.0, env_float("EDGE_PROCESSING_MAX_FPS", 12.0))
 EDGE_FILE_FRAME_STEP = max(1, env_int_alias(("EDGE_FILE_FRAME_STEP",), 3))
@@ -222,7 +226,7 @@ IMG_SIZE = max(32, env_int_alias(("YOLO_IMG_SIZE", "YOLOV5_IMG_SIZE"), 640))
 # Device: "cpu", "cuda", "xpu" (Intel GPU), or "auto" (auto-detect)
 DEVICE = env_alias(("YOLO_DEVICE", "YOLOV5_DEVICE"), "auto").strip() or "auto"
 WEIGHTS = _resolved_existing_path(
-    env_required_alias(("YOLO_WEIGHTS", "YOLOV5_WEIGHTS")),
+    env_alias(("YOLO_WEIGHTS", "YOLOV5_WEIGHTS"), "./edge/yolov5s.pt"),
     env("YOLOV5_WEIGHTS", ""),
 )
 REPO_RAW = env_alias(("YOLO_REPO", "YOLOV5_REPO"), "").strip()
