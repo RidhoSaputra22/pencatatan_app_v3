@@ -7,7 +7,7 @@ Database: SQLite (tanpa Docker)
 """
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, date, timedelta
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 
 from collections import defaultdict
 
@@ -36,6 +36,11 @@ from .stream_relay import (
     stop_udp_receiver,
     generate_relay_frames,
     get_relay_state,
+)
+from .runtime_config import (
+    RuntimeConfigError,
+    load_runtime_config,
+    save_runtime_config,
 )
 
 import os
@@ -192,6 +197,10 @@ class DashboardSummary(BaseModel):
     unique_visitors: int
     total_in: int
     total_out: int
+
+
+class RuntimeConfigUpdate(BaseModel):
+    values: Dict[str, Any]
 
 
 def serialize_employee(employee: Employee) -> EmployeeOut:
@@ -1277,6 +1286,24 @@ def reset_daily_database(
     except Exception as e:
         session.rollback()
         raise HTTPException(status_code=500, detail=f"Error reset harian: {str(e)}")
+
+
+@app.get("/api/admin/runtime-config")
+def get_runtime_config(_: User = Depends(require_role("ADMIN"))):
+    """Read whitelisted runtime configuration from .env."""
+    return load_runtime_config()
+
+
+@app.put("/api/admin/runtime-config")
+def update_runtime_config(
+    payload: RuntimeConfigUpdate,
+    _: User = Depends(require_role("ADMIN")),
+):
+    """Persist whitelisted runtime configuration to .env."""
+    try:
+        return save_runtime_config(payload.values)
+    except RuntimeConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @app.get("/api/stats/per_second")
 def stats_per_second(

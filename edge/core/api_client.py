@@ -111,6 +111,18 @@ def get_employee_registry(token: Optional[str]) -> Dict[str, Any]:
     return {"items": []}
 
 
+def get_runtime_config(token: Optional[str]) -> Dict[str, Any]:
+    """Fetch runtime tuning values managed from the dashboard."""
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    try:
+        r = requests.get(f"{BACKEND_URL}/api/admin/runtime-config", headers=headers, timeout=10)
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        log.error("Failed to get runtime config: %s", e)
+    return {}
+
+
 def send_visitor_event(payload: Dict[str, Any], token: Optional[str]) -> Dict[str, Any]:
     """Send visitor event to backend"""
     headers = {"Authorization": f"Bearer {token}"} if token else {}

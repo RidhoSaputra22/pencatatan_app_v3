@@ -11,13 +11,21 @@ from .api_client import (
     get_camera_config,
     get_counting_areas,
     get_employee_registry,
+    get_runtime_config,
     login_token,
     send_visitor_event,
 )
+from . import capture as capture_module
+from . import config as config_module
+from . import detection as detection_module
+from . import face_recognition as face_module
+from . import reid as reid_module
+from . import streaming as streaming_module
 from .capture import LatestFrameCapture
 from .config import (
     CAMERA_ID,
     CONFIG_REFRESH,
+    EDGE_FILE_FRAME_STEP,
     EDGE_LOCAL_FILE_REPLAY_POST_EVENTS,
     EDGE_PROCESSING_MAX_FPS,
     EDGE_RECORDING_ENABLED,
@@ -27,6 +35,7 @@ from .config import (
     EDGE_RECORDING_OUTPUT_DIR,
     EDGE_RECORDING_SEGMENT_MINUTES,
     EDGE_RECORDING_SEGMENT_SECONDS,
+    EDGE_STREAM_JPEG_QUALITY,
     EDGE_STREAM_MAX_FPS,
     EDGE_STREAM_URL,
     FACE_DETECTION_FRAME_INTERVAL,
@@ -79,6 +88,368 @@ log = get_logger("loops")
 
 EVENT_COOLDOWN = TRACK_EVENT_COOLDOWN_SECONDS
 REFERENCE_FRAME_SIZE = (TEST_FRAME_WIDTH, TEST_FRAME_HEIGHT)
+_TRACKER_REBUILD_KEYS = {
+    "FORCE_CENTROID",
+    "TRACK_MAX_AGE",
+    "TRACK_N_INIT",
+    "TRACK_MAX_DISTANCE",
+    "TRACK_MAX_COSINE_DISTANCE",
+}
+
+
+def _runtime_values(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    values = payload.get("values")
+    if isinstance(values, dict):
+        return values
+    items = payload.get("items")
+    if isinstance(items, list):
+        return {
+            str(item.get("key")): item.get("value")
+            for item in items
+            if isinstance(item, dict) and item.get("key")
+        }
+    return {}
+
+
+def _runtime_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _runtime_int(value: Any, default: int, minimum: Optional[int] = None, maximum: Optional[int] = None) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        parsed = default
+    if minimum is not None:
+        parsed = max(minimum, parsed)
+    if maximum is not None:
+        parsed = min(maximum, parsed)
+    return parsed
+
+
+def _runtime_float(
+    value: Any,
+    default: float,
+    minimum: Optional[float] = None,
+    maximum: Optional[float] = None,
+) -> float:
+    try:
+        parsed = float(str(value).strip())
+    except (TypeError, ValueError):
+        parsed = default
+    if minimum is not None:
+        parsed = max(minimum, parsed)
+    if maximum is not None:
+        parsed = min(maximum, parsed)
+    return parsed
+
+
+def _set_loop_global(name: str, value: Any) -> bool:
+    previous = globals().get(name)
+    if previous == value:
+        return False
+    globals()[name] = value
+    return True
+
+
+def _set_module_global(module: Any, name: str, value: Any) -> None:
+    if hasattr(module, name):
+        setattr(module, name, value)
+
+
+def _set_across_modules(name: str, value: Any, modules: Tuple[Any, ...]) -> bool:
+    changed = _set_loop_global(name, value)
+    for module in modules:
+        _set_module_global(module, name, value)
+    return changed
+
+
+def _apply_yolo_thresholds(model: Any, conf: Optional[float], iou: Optional[float]) -> None:
+    if model is None:
+        return
+    if conf is not None:
+        if hasattr(model, "_conf"):
+            model._conf = conf
+        if hasattr(model, "conf"):
+            model.conf = conf
+    if iou is not None:
+        if hasattr(model, "_iou"):
+            model._iou = iou
+        if hasattr(model, "iou"):
+            model.iou = iou
+
+
+def _apply_runtime_config(payload: Dict[str, Any], model: Any) -> Dict[str, Any]:
+    values = _runtime_values(payload)
+    if not values:
+        return {"tracker_rebuild": False, "changed": []}
+
+    changed: List[str] = []
+    tracker_rebuild = False
+
+    def mark(key: str, did_change: bool) -> None:
+        nonlocal tracker_rebuild
+        if not did_change:
+            return
+        changed.append(key)
+        if key in _TRACKER_REBUILD_KEYS:
+            tracker_rebuild = True
+
+    if "EDGE_STREAM_URL" in values:
+        stream_url_value = str(values.get("EDGE_STREAM_URL") or "").strip()
+        mark(
+            "EDGE_STREAM_URL",
+            _set_across_modules("EDGE_STREAM_URL", stream_url_value, (config_module, streaming_module)),
+        )
+
+    if "EDGE_CONFIG_REFRESH_SECONDS" in values:
+        refresh_seconds = _runtime_int(values["EDGE_CONFIG_REFRESH_SECONDS"], CONFIG_REFRESH, minimum=1)
+        mark("EDGE_CONFIG_REFRESH_SECONDS", _set_across_modules("CONFIG_REFRESH", refresh_seconds, (config_module,)))
+
+    if "EDGE_PROCESSING_MAX_FPS" in values:
+        processing_fps = _runtime_float(values["EDGE_PROCESSING_MAX_FPS"], EDGE_PROCESSING_MAX_FPS, minimum=0.0)
+        mark(
+            "EDGE_PROCESSING_MAX_FPS",
+            _set_across_modules("EDGE_PROCESSING_MAX_FPS", processing_fps, (config_module, streaming_module)),
+        )
+
+    if "EDGE_STREAM_MAX_FPS" in values:
+        stream_fps = _runtime_float(values["EDGE_STREAM_MAX_FPS"], EDGE_STREAM_MAX_FPS, minimum=0.0)
+        mark(
+            "EDGE_STREAM_MAX_FPS",
+            _set_across_modules("EDGE_STREAM_MAX_FPS", stream_fps, (config_module, streaming_module)),
+        )
+
+    if "EDGE_STREAM_JPEG_QUALITY" in values:
+        jpeg_quality = _runtime_int(values["EDGE_STREAM_JPEG_QUALITY"], 65, minimum=10, maximum=95)
+        mark(
+            "EDGE_STREAM_JPEG_QUALITY",
+            _set_across_modules("EDGE_STREAM_JPEG_QUALITY", jpeg_quality, (config_module, streaming_module)),
+        )
+
+    if "EDGE_FILE_FRAME_STEP" in values:
+        file_frame_step = _runtime_int(values["EDGE_FILE_FRAME_STEP"], EDGE_FILE_FRAME_STEP, minimum=1)
+        previous = getattr(capture_module, "EDGE_FILE_FRAME_STEP", file_frame_step)
+        capture_module.EDGE_FILE_FRAME_STEP = file_frame_step
+        _set_module_global(config_module, "EDGE_FILE_FRAME_STEP", file_frame_step)
+        if previous != file_frame_step:
+            changed.append("EDGE_FILE_FRAME_STEP")
+
+    if "EDGE_LOCAL_FILE_REPLAY_POST_EVENTS" in values:
+        replay_events = _runtime_bool(
+            values["EDGE_LOCAL_FILE_REPLAY_POST_EVENTS"],
+            EDGE_LOCAL_FILE_REPLAY_POST_EVENTS,
+        )
+        mark(
+            "EDGE_LOCAL_FILE_REPLAY_POST_EVENTS",
+            _set_across_modules(
+                "EDGE_LOCAL_FILE_REPLAY_POST_EVENTS",
+                replay_events,
+                (config_module,),
+            ),
+        )
+
+    yolo_conf = None
+    if "YOLO_CONF" in values:
+        yolo_conf = _runtime_float(values["YOLO_CONF"], detection_module.CONF_TH, minimum=0.0, maximum=1.0)
+        previous = getattr(detection_module, "CONF_TH", yolo_conf)
+        detection_module.CONF_TH = yolo_conf
+        streaming_module.CONF_TH = yolo_conf
+        config_module.CONF_TH = yolo_conf
+        if previous != yolo_conf:
+            changed.append("YOLO_CONF")
+
+    yolo_iou = None
+    if "YOLO_IOU" in values:
+        yolo_iou = _runtime_float(values["YOLO_IOU"], detection_module.IOU_TH, minimum=0.0, maximum=1.0)
+        previous = getattr(detection_module, "IOU_TH", yolo_iou)
+        detection_module.IOU_TH = yolo_iou
+        streaming_module.IOU_TH = yolo_iou
+        config_module.IOU_TH = yolo_iou
+        if previous != yolo_iou:
+            changed.append("YOLO_IOU")
+
+    if yolo_conf is not None or yolo_iou is not None:
+        _apply_yolo_thresholds(model, yolo_conf, yolo_iou)
+
+    if "YOLO_IMG_SIZE" in values:
+        img_size = _runtime_int(values["YOLO_IMG_SIZE"], IMG_SIZE, minimum=32)
+        mark("YOLO_IMG_SIZE", _set_across_modules("IMG_SIZE", img_size, (config_module, streaming_module)))
+
+    if "SUPPRESS_NESTED_DUPLICATES" in values:
+        suppress_duplicates = _runtime_bool(
+            values["SUPPRESS_NESTED_DUPLICATES"],
+            detection_module.SUPPRESS_NESTED_DUPLICATES,
+        )
+        previous = getattr(detection_module, "SUPPRESS_NESTED_DUPLICATES", suppress_duplicates)
+        detection_module.SUPPRESS_NESTED_DUPLICATES = suppress_duplicates
+        streaming_module.SUPPRESS_NESTED_DUPLICATES = suppress_duplicates
+        config_module.SUPPRESS_NESTED_DUPLICATES = suppress_duplicates
+        if previous != suppress_duplicates:
+            changed.append("SUPPRESS_NESTED_DUPLICATES")
+
+    if "DUPLICATE_CONTAINMENT_THRESHOLD" in values:
+        containment = _runtime_float(
+            values["DUPLICATE_CONTAINMENT_THRESHOLD"],
+            detection_module.DUPLICATE_CONTAINMENT_THRESHOLD,
+            minimum=0.0,
+            maximum=1.0,
+        )
+        previous = getattr(detection_module, "DUPLICATE_CONTAINMENT_THRESHOLD", containment)
+        detection_module.DUPLICATE_CONTAINMENT_THRESHOLD = containment
+        streaming_module.DUPLICATE_CONTAINMENT_THRESHOLD = containment
+        config_module.DUPLICATE_CONTAINMENT_THRESHOLD = containment
+        if previous != containment:
+            changed.append("DUPLICATE_CONTAINMENT_THRESHOLD")
+
+    if "DUPLICATE_IOU_THRESHOLD" in values:
+        duplicate_iou = _runtime_float(
+            values["DUPLICATE_IOU_THRESHOLD"],
+            detection_module.DUPLICATE_IOU_THRESHOLD,
+            minimum=0.0,
+            maximum=1.0,
+        )
+        previous = getattr(detection_module, "DUPLICATE_IOU_THRESHOLD", duplicate_iou)
+        detection_module.DUPLICATE_IOU_THRESHOLD = duplicate_iou
+        streaming_module.DUPLICATE_IOU_THRESHOLD = duplicate_iou
+        config_module.DUPLICATE_IOU_THRESHOLD = duplicate_iou
+        if previous != duplicate_iou:
+            changed.append("DUPLICATE_IOU_THRESHOLD")
+
+    tracker_fields = {
+        "FORCE_CENTROID": ("FORCE_CENTROID", _runtime_bool, False, (config_module, streaming_module)),
+        "TRACK_MAX_AGE": ("TRACK_MAX_DISAPPEARED", _runtime_int, 0, (config_module, streaming_module)),
+        "TRACK_N_INIT": ("TRACK_CONFIRM_FRAMES", _runtime_int, 1, (config_module, streaming_module)),
+        "TRACK_MAX_DISTANCE": ("TRACK_MAX_DISTANCE", _runtime_float, 0.0, (config_module, streaming_module)),
+        "TRACK_MAX_COSINE_DISTANCE": (
+            "TRACK_MAX_COSINE_DISTANCE",
+            _runtime_float,
+            0.0,
+            (config_module, streaming_module),
+        ),
+    }
+    for env_key, (global_name, caster, minimum, modules) in tracker_fields.items():
+        if env_key not in values:
+            continue
+        default = globals().get(global_name)
+        if caster is _runtime_bool:
+            parsed = caster(values[env_key], bool(default))
+        else:
+            parsed = caster(values[env_key], default, minimum=minimum)
+        mark(env_key, _set_across_modules(global_name, parsed, modules))
+
+    live_loop_fields = {
+        "TRACK_ROI_POINT": ("TRACK_ROI_POINT", str),
+        "TRACK_ENTRY_CONFIRM_FRAMES": ("TRACK_ENTRY_CONFIRM_FRAMES", int),
+        "TRACK_EXIT_CONFIRM_FRAMES": ("TRACK_EXIT_CONFIRM_FRAMES", int),
+        "TRACK_EXIT_BOTTOM_CONFIRM_FRAMES": ("TRACK_EXIT_BOTTOM_CONFIRM_FRAMES", int),
+        "TRACK_EXIT_EDGE_MARGIN": ("TRACK_EXIT_EDGE_MARGIN", float),
+        "TRACK_EXIT_BOTTOM_MARGIN": ("TRACK_EXIT_BOTTOM_MARGIN", float),
+        "TRACK_EXIT_MIN_DELTA_Y": ("TRACK_EXIT_MIN_DELTA_Y", float),
+        "TRACK_EXIT_ALLOW_WITHOUT_ENTRY": ("TRACK_EXIT_ALLOW_WITHOUT_ENTRY", bool),
+        "TRACK_EXIT_WITHOUT_ENTRY_MIN_FRAMES": ("TRACK_EXIT_WITHOUT_ENTRY_MIN_FRAMES", int),
+        "TRACK_EVENT_COOLDOWN_SECONDS": ("TRACK_EVENT_COOLDOWN_SECONDS", float),
+        "TRACK_SAME_TRACK_OUT_COOLDOWN_SECONDS": ("TRACK_SAME_TRACK_OUT_COOLDOWN_SECONDS", float),
+        "TRACK_REENTRY_COOLDOWN_SECONDS": ("TRACK_REENTRY_COOLDOWN_SECONDS", float),
+        "IDENTITY_MODE": ("IDENTITY_MODE", str),
+    }
+    for env_key, (global_name, value_type) in live_loop_fields.items():
+        if env_key not in values:
+            continue
+        default = globals().get(global_name)
+        if value_type is bool:
+            parsed = _runtime_bool(values[env_key], bool(default))
+        elif value_type is int:
+            parsed = _runtime_int(values[env_key], int(default), minimum=1)
+        elif value_type is float:
+            parsed = _runtime_float(values[env_key], float(default), minimum=0.0)
+        else:
+            parsed = str(values[env_key] or "").strip().lower() or str(default)
+        did_change = _set_across_modules(global_name, parsed, (config_module, streaming_module))
+        if global_name == "TRACK_EVENT_COOLDOWN_SECONDS":
+            _set_loop_global("EVENT_COOLDOWN", parsed)
+        mark(env_key, did_change)
+
+    reid_fields = {
+        "REID_MATCH_THRESHOLD": ("REID_MATCH_THRESHOLD", float, 0.0, 1.0),
+        "REID_MIN_TRACK_FRAMES": ("REID_MIN_TRACK_FRAMES", int, 1, None),
+        "REID_STRONG_MATCH_THRESHOLD": ("REID_STRONG_MATCH_THRESHOLD", float, 0.0, 1.0),
+        "REID_AMBIGUITY_MARGIN": ("REID_AMBIGUITY_MARGIN", float, 0.0, 1.0),
+        "REID_PROTOTYPE_ALPHA": ("REID_PROTOTYPE_ALPHA", float, 0.01, 1.0),
+    }
+    for env_key, (global_name, value_type, minimum, maximum) in reid_fields.items():
+        if env_key not in values:
+            continue
+        default = getattr(reid_module, global_name)
+        if value_type is int:
+            parsed = _runtime_int(values[env_key], int(default), minimum=int(minimum))
+        else:
+            parsed = _runtime_float(values[env_key], float(default), minimum=minimum, maximum=maximum)
+        previous = getattr(reid_module, global_name)
+        setattr(reid_module, global_name, parsed)
+        _set_module_global(config_module, global_name, parsed)
+        _set_module_global(streaming_module, global_name, parsed)
+        if previous != parsed:
+            changed.append(env_key)
+
+    face_fields = {
+        "EMPLOYEE_MATCH_THRESHOLD": ("EMPLOYEE_MATCH_THRESHOLD", float, 0.0, 1.0),
+        "EMPLOYEE_REGISTRY_REFRESH_SECONDS": ("EMPLOYEE_REGISTRY_REFRESH_SECONDS", int, 1, None),
+        "FACE_RECHECK_SECONDS": ("FACE_RECHECK_SECONDS", float, 0.0, 60.0),
+        "FACE_UNKNOWN_TIMEOUT": ("FACE_UNKNOWN_TIMEOUT", float, 0.0, 120.0),
+        "FACE_DETECTION_FRAME_INTERVAL": ("FACE_DETECTION_FRAME_INTERVAL", int, 1, None),
+    }
+    for env_key, (global_name, value_type, minimum, maximum) in face_fields.items():
+        if env_key not in values:
+            continue
+        default = getattr(face_module, global_name)
+        if value_type is int:
+            parsed = _runtime_int(values[env_key], int(default), minimum=int(minimum))
+        else:
+            parsed = _runtime_float(values[env_key], float(default), minimum=minimum, maximum=maximum)
+        previous = getattr(face_module, global_name)
+        setattr(face_module, global_name, parsed)
+        _set_module_global(config_module, global_name, parsed)
+        _set_module_global(streaming_module, global_name, parsed)
+        if global_name == "FACE_DETECTION_FRAME_INTERVAL":
+            _set_loop_global(global_name, parsed)
+        if previous != parsed:
+            changed.append(env_key)
+
+    if "FACE_REGISTRY_SOURCE" in values:
+        registry_source = str(values["FACE_REGISTRY_SOURCE"] or "backend").strip().lower() or "backend"
+        previous = getattr(face_module, "FACE_REGISTRY_SOURCE", registry_source)
+        face_module.FACE_REGISTRY_SOURCE = registry_source
+        _set_across_modules("FACE_REGISTRY_SOURCE", registry_source, (config_module, streaming_module))
+        if previous != registry_source:
+            changed.append("FACE_REGISTRY_SOURCE")
+
+    if "EDGE_EMPLOYEE_FACES_DIR" in values:
+        raw_employee_faces_dir = str(values["EDGE_EMPLOYEE_FACES_DIR"] or "").strip()
+        employee_faces_dir = (
+            config_module.resolve_project_path(raw_employee_faces_dir)
+            if raw_employee_faces_dir
+            else ""
+        )
+        previous = getattr(face_module, "EDGE_EMPLOYEE_FACES_DIR", employee_faces_dir)
+        face_module.EDGE_EMPLOYEE_FACES_DIR = employee_faces_dir
+        _set_module_global(config_module, "EDGE_EMPLOYEE_FACES_DIR", employee_faces_dir)
+        _set_module_global(streaming_module, "EDGE_EMPLOYEE_FACES_DIR", employee_faces_dir)
+        if previous != employee_faces_dir:
+            changed.append("EDGE_EMPLOYEE_FACES_DIR")
+
+    if changed:
+        log.info("Applied runtime config update: %s", ", ".join(changed))
+
+    return {
+        "tracker_rebuild": tracker_rebuild,
+        "changed": changed,
+        "stream_url": str(values.get("EDGE_STREAM_URL") or "").strip(),
+    }
 
 
 def _stable_identity_key(fallback_key: str, classification: Dict[str, Any]) -> str:
@@ -542,7 +913,7 @@ def real_loop():
     base_events_enabled = not is_video_test
     events_enabled = base_events_enabled
     local_file_events_consumed = False
-    needs_backend_auth = base_events_enabled or FACE_REGISTRY_SOURCE == "backend"
+    needs_backend_auth = True
 
     token = login_token() if needs_backend_auth else None
     model = load_model()
@@ -630,9 +1001,19 @@ def real_loop():
                 if needs_backend_auth and token is None:
                     token = login_token()
 
+                runtime_apply = _apply_runtime_config(get_runtime_config(token), model)
+                if runtime_apply.get("tracker_rebuild"):
+                    tracker, tracker_mode = _build_tracker()
+                    visitor_states = {}
+                    log.info("Tracker rebuilt after runtime config update (%s)", tracker_mode)
+                target_frame_time = 1.0 / EDGE_PROCESSING_MAX_FPS if EDGE_PROCESSING_MAX_FPS > 0 else 0.0
+
                 if not is_video_test:
                     cfg = get_camera_config(token)
-                    if cfg and not EDGE_STREAM_URL:
+                    runtime_stream_url = (runtime_apply.get("stream_url") or "").strip()
+                    if runtime_stream_url:
+                        stream_url = runtime_stream_url
+                    elif cfg and not EDGE_STREAM_URL:
                         stream_url = (cfg.get("stream_url") or "").strip() or stream_url
 
                     areas = get_counting_areas(token)

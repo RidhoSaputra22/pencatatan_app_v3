@@ -265,9 +265,9 @@ def _is_nested_duplicate(
 
 def suppress_duplicate_person_detections(
     detections: List[Tuple[float, float, float, float, float]],
-    enabled: bool = SUPPRESS_NESTED_DUPLICATES,
-    containment_threshold: float = DUPLICATE_CONTAINMENT_THRESHOLD,
-    iou_threshold: float = DUPLICATE_IOU_THRESHOLD,
+    enabled: Optional[bool] = None,
+    containment_threshold: Optional[float] = None,
+    iou_threshold: Optional[float] = None,
 ) -> List[Tuple[float, float, float, float, float]]:
     """Drop nested duplicate person boxes before tracking.
 
@@ -276,6 +276,13 @@ def suppress_duplicate_person_detections(
     two tracks for the same person. This filter removes the nested duplicate
     while keeping nearby real people who only partially overlap.
     """
+    if enabled is None:
+        enabled = SUPPRESS_NESTED_DUPLICATES
+    if containment_threshold is None:
+        containment_threshold = DUPLICATE_CONTAINMENT_THRESHOLD
+    if iou_threshold is None:
+        iou_threshold = DUPLICATE_IOU_THRESHOLD
+
     if not enabled or len(detections) < 2:
         return detections
 
