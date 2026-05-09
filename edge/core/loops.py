@@ -18,6 +18,7 @@ from .capture import LatestFrameCapture
 from .config import (
     CAMERA_ID,
     CONFIG_REFRESH,
+    EDGE_LOCAL_FILE_REPLAY_POST_EVENTS,
     EDGE_PROCESSING_MAX_FPS,
     EDGE_RECORDING_ENABLED,
     EDGE_RECORDING_FILE_PREFIX,
@@ -53,6 +54,9 @@ from .config import (
     TRACK_EXIT_BOTTOM_CONFIRM_FRAMES,
     TRACK_EXIT_CONFIRM_FRAMES,
     TRACK_EXIT_EDGE_MARGIN,
+    TRACK_EXIT_GATE_APPROACH_FRAMES,
+    TRACK_EXIT_HEAD_CONFIRM_FRAMES,
+    TRACK_EXIT_HEAD_RATIO,
     TRACK_EXIT_MIN_DELTA_Y,
     TRACK_EXIT_WITHOUT_ENTRY_MIN_FRAMES,
     TRACK_MAX_COSINE_DISTANCE,
@@ -172,6 +176,124 @@ def _exit_gate_y(roi: Optional[List[List[float]]], frame_height: int) -> int:
     return int(max(0.0, min(float(frame_height - 1), gate_y)))
 
 
+def _state_cleared_exit_zone(state: Dict[str, Any]) -> bool:
+    """Track must move away from the bottom gate before it can be counted OUT."""
+    return bool(state.get("cleared_exit_zone"))
+
+
+def _bbox_height(bbox: Tuple[float, float, float, float]) -> float:
+    return max(1.0, float(bbox[3]) - float(bbox[1]))
+
+
+def _bbox_near_bottom_edge(
+    bbox: Tuple[float, float, float, float],
+    frame_height: int,
+    margin: float = TRACK_EXIT_EDGE_MARGIN,
+) -> bool:
+    if margin <= 0:
+        return False
+    return float(bbox[3]) >= max(0.0, float(frame_height) - margin)
+
+
+def _reset_exit_sequence_state(state: Dict[str, Any]) -> None:
+    state["exit_sequence_active"] = False
+    state["exit_sequence_frames"] = 0
+    state["exit_peak_height"] = 0.0
+    state["exit_bottom_edge_frames"] = 0
+    state["exit_head_only_frames"] = 0
+    state["exit_head_only_seen"] = False
+    state["exit_candidate_logged"] = False
+
+
+def _update_exit_sequence_state(
+    state: Dict[str, Any],
+    bbox: Tuple[float, float, float, float],
+    frame_height: int,
+    in_bottom_exit_zone: bool,
+    moving_toward_bottom: bool,
+    moving_away_from_bottom: bool,
+) -> None:
+    """Track a strict exit sequence: gate approach -> bottom-edge crop -> disappear."""
+    if not _state_cleared_exit_zone(state):
+        _reset_exit_sequence_state(state)
+        return
+
+    if moving_away_from_bottom or not in_bottom_exit_zone:
+        _reset_exit_sequence_state(state)
+        return
+
+    if not moving_toward_bottom:
+        return
+
+    bbox_height = _bbox_height(bbox)
+    near_bottom_edge = _bbox_near_bottom_edge(bbox, frame_height)
+    if not state.get("exit_sequence_active"):
+        _reset_exit_sequence_state(state)
+        state["exit_sequence_active"] = True
+
+    state["exit_sequence_frames"] = int(state.get("exit_sequence_frames", 0)) + 1
+    state["exit_peak_height"] = max(float(state.get("exit_peak_height", 0.0)), bbox_height)
+
+    if near_bottom_edge:
+        state["exit_bottom_edge_frames"] = int(state.get("exit_bottom_edge_frames", 0)) + 1
+    else:
+        state["exit_bottom_edge_frames"] = 0
+
+    peak_height = max(float(state.get("exit_peak_height", 0.0)), 1.0)
+    shrink_ratio = bbox_height / peak_height
+    if near_bottom_edge and shrink_ratio <= TRACK_EXIT_HEAD_RATIO:
+        state["exit_head_only_frames"] = int(state.get("exit_head_only_frames", 0)) + 1
+        if int(state.get("exit_head_only_frames", 0)) >= TRACK_EXIT_HEAD_CONFIRM_FRAMES:
+            state["exit_head_only_seen"] = True
+    elif not state.get("exit_head_only_seen"):
+        state["exit_head_only_frames"] = 0
+
+
+def _state_has_exit_gate_evidence(state: Dict[str, Any]) -> bool:
+    return (
+        bool(state.get("exit_sequence_active"))
+        and _state_cleared_exit_zone(state)
+        and int(state.get("exit_sequence_frames", 0)) >= TRACK_EXIT_GATE_APPROACH_FRAMES
+        and int(state.get("exit_bottom_edge_frames", 0)) >= TRACK_EXIT_BOTTOM_CONFIRM_FRAMES
+    )
+
+
+def _state_outside_roi_long_enough(state: Dict[str, Any]) -> bool:
+    return (
+        not bool(state.get("last_in_roi", True))
+        and int(state.get("outside_frames", 0)) >= TRACK_EXIT_CONFIRM_FRAMES
+    )
+
+
+def _state_ready_for_exit_commit(
+    state: Dict[str, Any],
+    *,
+    final_phase: bool = False,
+    frame_height: Optional[int] = None,
+) -> bool:
+    if not _state_has_exit_gate_evidence(state):
+        return False
+
+    if bool(state.get("exit_head_only_seen")):
+        return True
+
+    if _state_outside_roi_long_enough(state):
+        return True
+
+    if not final_phase:
+        return False
+
+    if int(state.get("missing_frames", 0)) >= TRACK_EXIT_CONFIRM_FRAMES:
+        return True
+
+    last_bbox = state.get("last_bbox")
+    return bool(
+        frame_height is not None
+        and last_bbox
+        and _bbox_near_bottom_edge(last_bbox, frame_height)
+    )
+
+
 def _identity_ready(identity: Dict[str, Any]) -> bool:
     return identity.get("identity_status") in {"CONFIRMED", "FALLBACK"}
 
@@ -234,12 +356,16 @@ def _finalize_open_exit_states(
             or not last_bbox
             or state.get("exit_logged")
             or not _state_can_exit(state)
+            or not _state_ready_for_exit_commit(
+                state,
+                final_phase=True,
+                frame_height=frame_height,
+            )
         ):
             continue
 
         if not (
-            _bbox_near_frame_edge(last_bbox, frame_width, frame_height)
-            or _bbox_in_bottom_exit_zone(last_bbox, roi, frame_height)
+            _bbox_near_bottom_edge(last_bbox, frame_height)
             or not bool(state.get("last_in_roi", True))
         ):
             continue
@@ -387,6 +513,27 @@ def _build_output_writer(stream_url: str, frame: np.ndarray, source_fps: float):
     return writer, output_path
 
 
+def _build_tracker():
+    tracker_mode = "DeepSORT+ReID" if DEEPSORT_AVAILABLE and not FORCE_CENTROID else "CentroidTracker"
+    if DEEPSORT_AVAILABLE and not FORCE_CENTROID:
+        tracker = DeepSORTTracker(
+            max_age=TRACK_MAX_DISAPPEARED,
+            n_init=TRACK_CONFIRM_FRAMES,
+            max_cosine_distance=TRACK_MAX_COSINE_DISTANCE,
+        )
+        if getattr(tracker, "using_fallback", False):
+            tracker_mode = "CentroidTracker"
+        return tracker, tracker_mode
+
+    return (
+        CentroidTracker(
+            max_disappeared=TRACK_MAX_DISAPPEARED,
+            max_distance=TRACK_MAX_DISTANCE,
+        ),
+        tracker_mode,
+    )
+
+
 def real_loop():
     """YOLO + tracking + optional offline video test profile."""
     requested_video_test = TEST_MODE == "video"
@@ -395,14 +542,13 @@ def real_loop():
     base_events_enabled = not is_video_test
     events_enabled = base_events_enabled
     local_file_events_consumed = False
-    tracker_mode = "DeepSORT+ReID" if DEEPSORT_AVAILABLE and not FORCE_CENTROID else "CentroidTracker"
     needs_backend_auth = base_events_enabled or FACE_REGISTRY_SOURCE == "backend"
 
     token = login_token() if needs_backend_auth else None
     model = load_model()
     face_recognizer = EmployeeFaceRecognizer()
 
-    log.info("Running in REAL mode (%s + employee filtering)", tracker_mode)
+    # log.info("Running in REAL mode (%s + employee filtering)", tracker_mode)
     log.info(
         "Runtime tuning: processing_target=%s fps | stream_target=%s fps | face_interval=%s frame(s)",
         EDGE_PROCESSING_MAX_FPS or "unlimited",
@@ -422,19 +568,7 @@ def real_loop():
             TEST_MAX_SECONDS or "all",
         )
 
-    if DEEPSORT_AVAILABLE and not FORCE_CENTROID:
-        tracker = DeepSORTTracker(
-            max_age=TRACK_MAX_DISAPPEARED,
-            n_init=TRACK_CONFIRM_FRAMES,
-            max_cosine_distance=TRACK_MAX_COSINE_DISTANCE,
-        )
-        if getattr(tracker, "using_fallback", False):
-            tracker_mode = "CentroidTracker"
-    else:
-        tracker = CentroidTracker(
-            max_disappeared=TRACK_MAX_DISAPPEARED,
-            max_distance=TRACK_MAX_DISTANCE,
-        )
+    tracker, tracker_mode = _build_tracker()
 
     last_cfg_fetch = 0.0
     roi = None
@@ -569,11 +703,23 @@ def real_loop():
                         )
                         if finalized:
                             log.info("Finalized %d OUT event(s) before local replay", finalized)
-                        events_enabled = False
-                        local_file_events_consumed = True
-                        log.info(
-                            "Local video source finished once; restarting preview without event posting"
-                        )
+
+                        if EDGE_LOCAL_FILE_REPLAY_POST_EVENTS:
+                            visitor_states = {}
+                            visitor_flow_states = {}
+                            last_event_time = {}
+                            face_recognizer.reset_daily()
+                            tracker, tracker_mode = _build_tracker()
+                            local_file_events_consumed = False
+                            log.info(
+                                "Local video source finished once; restarting with event posting enabled"
+                            )
+                        else:
+                            events_enabled = False
+                            local_file_events_consumed = True
+                            log.info(
+                                "Local video source finished once; restarting preview without event posting"
+                            )
                     log.info("Video file ended. Restarting from beginning...")
                     cap.release()
                     cap = None
@@ -704,10 +850,23 @@ def real_loop():
                         state["direction"] = "OUT"
                         return True
 
+                    if not _state_ready_for_exit_commit(state):
+                        state["pending_entry"] = False
+                        state["direction"] = "EXITING" if state.get("exit_sequence_active") else (
+                            "IN_ROI" if state.get("entry_logged") else "TRACKING"
+                        )
+                        log.debug(
+                            "Skip OUT before strict exit sequence completes track=%s visitor=%s",
+                            track_id,
+                            visitor_key[:8],
+                        )
+                        return True
+
                 if (
                     direction == "IN"
                     and now_ts < float(flow.get("suppress_in_until", 0.0) or 0.0)
                 ):
+                    _reset_exit_sequence_state(state)
                     state["pending_entry"] = False
                     state["entry_logged"] = False
                     state["is_new"] = False
@@ -715,6 +874,7 @@ def real_loop():
                     return True
 
                 if classification.get("person_type") == "EMPLOYEE":
+                    _reset_exit_sequence_state(state)
                     state["pending_entry"] = False
                     state["entry_logged"] = False
                     state["is_new"] = False
@@ -724,6 +884,7 @@ def real_loop():
 
                 if area_direction_mode not in {"BOTH", direction}:
                     if direction == "IN":
+                        _reset_exit_sequence_state(state)
                         state["pending_entry"] = False
                         state["entry_logged"] = True
                         state["is_new"] = False
@@ -731,6 +892,7 @@ def real_loop():
                         flow["inside"] = True
                         flow["last_in_ts"] = now_ts
                     else:
+                        _reset_exit_sequence_state(state)
                         state["entry_logged"] = False
                         state["exit_logged"] = True
                         state["direction"] = "OUT"
@@ -741,12 +903,14 @@ def real_loop():
                 debounce_key = f"{visitor_key}_{direction}"
                 if now_ts - last_event_time.get(debounce_key, 0.0) < EVENT_COOLDOWN:
                     if direction == "IN":
+                        _reset_exit_sequence_state(state)
                         state["pending_entry"] = False
                         state["entry_logged"] = True
                         state["is_new"] = False
                         state["direction"] = "IN_ROI"
                         flow["inside"] = True
                     else:
+                        _reset_exit_sequence_state(state)
                         state["entry_logged"] = False
                         state["exit_logged"] = True
                         state["direction"] = "OUT"
@@ -778,6 +942,7 @@ def real_loop():
                 last_event_time[debounce_key] = now_ts
                 state["pending_entry"] = False
                 if direction == "IN":
+                    _reset_exit_sequence_state(state)
                     state["entry_logged"] = True
                     state["exit_logged"] = False
                     state["is_new"] = bool(is_new_unique)
@@ -785,6 +950,7 @@ def real_loop():
                     flow["inside"] = True
                     flow["last_in_ts"] = now_ts
                 else:
+                    _reset_exit_sequence_state(state)
                     state["entry_logged"] = False
                     state["direction"] = "OUT"
                     state["exit_logged"] = True
@@ -820,6 +986,13 @@ def real_loop():
                         "outside_frames": 0,
                         "exit_zone_frames": 0,
                         "exit_motion_frames": 0,
+                        "cleared_exit_zone": False,
+                        "exit_sequence_active": False,
+                        "exit_sequence_frames": 0,
+                        "exit_peak_height": 0.0,
+                        "exit_bottom_edge_frames": 0,
+                        "exit_head_only_frames": 0,
+                        "exit_head_only_seen": False,
                         "seen_frames": 0,
                         "missing_frames": 0,
                     },
@@ -849,6 +1022,10 @@ def real_loop():
                     moving_toward_bottom = (
                         bottom_delta >= TRACK_EXIT_MIN_DELTA_Y
                         or centroid_delta >= TRACK_EXIT_MIN_DELTA_Y
+                    )
+                    moving_away_from_bottom = (
+                        bottom_delta <= -TRACK_EXIT_MIN_DELTA_Y
+                        or centroid_delta <= -TRACK_EXIT_MIN_DELTA_Y
                     )
                     in_bottom_exit_zone = _bbox_in_bottom_exit_zone(track.bbox, roi, frame_h)
 
@@ -896,6 +1073,7 @@ def real_loop():
                         state["exit_zone_frames"] = int(state.get("exit_zone_frames", 0)) + 1
                     else:
                         state["exit_zone_frames"] = 0
+                        state["cleared_exit_zone"] = True
 
                     if moving_toward_bottom:
                         state["exit_motion_frames"] = int(state.get("exit_motion_frames", 0)) + 1
@@ -904,6 +1082,15 @@ def real_loop():
                             0,
                             int(state.get("exit_motion_frames", 0)) - 1,
                         )
+
+                    _update_exit_sequence_state(
+                        state,
+                        tuple(track.bbox),
+                        frame_h,
+                        in_bottom_exit_zone,
+                        moving_toward_bottom,
+                        moving_away_from_bottom,
+                    )
 
                     if classification["person_type"] == "EMPLOYEE":
                         employee_tracks += 1
@@ -943,27 +1130,26 @@ def real_loop():
                             )
                         )
                     )
-                    bottom_exit_ready = (
-                        ready_to_exit
-                        and int(state.get("exit_zone_frames", 0)) >= TRACK_EXIT_BOTTOM_CONFIRM_FRAMES
-                        and int(state.get("exit_motion_frames", 0)) >= 1
-                    )
-                    if in_bottom_exit_zone and not state.get("exit_candidate_logged"):
+                    exit_sequence_ready = ready_to_exit and _state_ready_for_exit_commit(state)
+                    if state.get("exit_sequence_active") and not state.get("exit_candidate_logged"):
                         log.debug(
                             (
-                                "Exit candidate track=%s visitor=%s ready=%s seen=%s "
+                                "Exit sequence track=%s visitor=%s ready=%s seen=%s "
                                 "hits=%s observed=%s entry=%s motion=%s zone=%s "
-                                "bottom_delta=%.1f centroid_delta=%.1f"
+                                "head=%s head_frames=%s peak=%.1f bottom_delta=%.1f centroid_delta=%.1f"
                             ),
                             track_id,
                             visitor_key[:8],
-                            ready_to_exit,
+                            exit_sequence_ready,
                             state.get("seen_frames", 0),
                             state.get("track_hits", 0),
                             state.get("observed_frames", 0),
                             state.get("entry_logged"),
                             state.get("exit_motion_frames", 0),
                             state.get("exit_zone_frames", 0),
+                            state.get("exit_head_only_seen"),
+                            state.get("exit_head_only_frames", 0),
+                            float(state.get("exit_peak_height", 0.0)),
                             bottom_delta,
                             centroid_delta,
                         )
@@ -974,22 +1160,19 @@ def real_loop():
                         state["entry_logged"] = False
                         state["is_new"] = False
                         state["direction"] = "IGNORE"
-                    elif bottom_exit_ready:
-                        commit_count_event(
-                            "OUT",
-                            track_id,
-                            visitor_key,
-                            state,
-                            classification,
-                            reason="exit_gate_motion",
-                        )
-                    elif (
-                        ready_to_exit
-                        and in_bottom_exit_zone
-                        and int(state.get("exit_motion_frames", 0)) >= 1
-                    ):
+                    elif ready_to_exit and state.get("exit_sequence_active"):
                         state["pending_entry"] = False
-                        state["direction"] = "EXITING"
+                        if exit_sequence_ready:
+                            commit_count_event(
+                                "OUT",
+                                track_id,
+                                visitor_key,
+                                state,
+                                classification,
+                                reason="exit_gate_confirmed",
+                            )
+                        else:
+                            state["direction"] = "EXITING"
                     elif in_roi_now and not ready_to_count and not state.get("entry_logged"):
                         state["pending_entry"] = True
                         state["direction"] = "VERIFY"
@@ -1010,15 +1193,8 @@ def real_loop():
                             state["direction"] = "IN_ROI"
                     elif state.get("entry_logged"):
                         state["pending_entry"] = False
-                        if int(state.get("outside_frames", 0)) >= TRACK_EXIT_CONFIRM_FRAMES:
-                            commit_count_event(
-                                "OUT",
-                                track_id,
-                                visitor_key,
-                                state,
-                                classification,
-                                reason="roi_leave",
-                            )
+                        if exit_sequence_ready or state.get("exit_sequence_active"):
+                            state["direction"] = "EXITING"
                         elif state.get("direction") not in {"IN", "OUT"}:
                             state["direction"] = "IN_ROI"
                     else:
@@ -1039,9 +1215,10 @@ def real_loop():
                         _state_can_exit(state)
                         and last_bbox
                         and int(state.get("missing_frames", 0)) >= TRACK_EXIT_CONFIRM_FRAMES
-                        and (
-                            _bbox_near_frame_edge(last_bbox, frame_w, frame_h)
-                            or _bbox_in_bottom_exit_zone(last_bbox, roi, frame_h)
+                        and _state_ready_for_exit_commit(
+                            state,
+                            final_phase=True,
+                            frame_height=frame_h,
                         )
                     ):
                         commit_count_event(
@@ -1050,7 +1227,7 @@ def real_loop():
                             visitor_key,
                             state,
                             classification,
-                            reason="predicted_track_lost_near_exit",
+                            reason="exit_gate_head_disappear",
                         )
 
                 visitor_states[track_id] = state
@@ -1063,11 +1240,10 @@ def real_loop():
                 should_finalize_exit = (
                     _state_can_exit(state)
                     and last_bbox
-                    and (
-                        _bbox_near_frame_edge(last_bbox, frame_w, frame_h)
-                        or _bbox_in_bottom_exit_zone(last_bbox, roi, frame_h)
-                        or int(state.get("outside_frames", 0)) >= TRACK_EXIT_CONFIRM_FRAMES
-                        or not bool(state.get("last_in_roi", True))
+                    and _state_ready_for_exit_commit(
+                        state,
+                        final_phase=True,
+                        frame_height=frame_h,
                     )
                 )
                 if should_finalize_exit:
@@ -1077,7 +1253,7 @@ def real_loop():
                         visitor_key,
                         state,
                         _classification_from_state(state),
-                        reason="track_lost_near_exit",
+                        reason="exit_gate_head_disappear",
                     )
                 del visitor_states[lost_track_id]
 

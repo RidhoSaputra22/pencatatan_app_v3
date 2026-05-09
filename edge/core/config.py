@@ -200,6 +200,7 @@ EDGE_CAPTURE_FFMPEG_OPTIONS = env(
     "EDGE_CAPTURE_FFMPEG_OPTIONS",
     "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|max_delay;500000|reorder_queue_size;0",
 ).strip()
+EDGE_LOCAL_FILE_REPLAY_POST_EVENTS = env_bool("EDGE_LOCAL_FILE_REPLAY_POST_EVENTS", False)
 
 # Processed footage backup configuration
 EDGE_RECORDING_ENABLED = env_bool("EDGE_RECORDING_ENABLED", True)
@@ -250,6 +251,9 @@ TRACK_EXIT_BOTTOM_CONFIRM_FRAMES = max(1, env_int_alias(("TRACK_EXIT_BOTTOM_CONF
 TRACK_EXIT_EDGE_MARGIN = max(0.0, env_float_alias(("TRACK_EXIT_EDGE_MARGIN",), 48.0))
 TRACK_EXIT_BOTTOM_MARGIN = max(0.0, env_float_alias(("TRACK_EXIT_BOTTOM_MARGIN",), 110.0))
 TRACK_EXIT_MIN_DELTA_Y = max(0.0, env_float_alias(("TRACK_EXIT_MIN_DELTA_Y",), 3.0))
+TRACK_EXIT_HEAD_RATIO = min(0.95, max(0.08, env_float_alias(("TRACK_EXIT_HEAD_RATIO",), 0.42)))
+TRACK_EXIT_HEAD_CONFIRM_FRAMES = max(1, env_int_alias(("TRACK_EXIT_HEAD_CONFIRM_FRAMES",), 2))
+TRACK_EXIT_GATE_APPROACH_FRAMES = max(1, env_int_alias(("TRACK_EXIT_GATE_APPROACH_FRAMES",), 2))
 TRACK_EXIT_ALLOW_WITHOUT_ENTRY = env_bool_alias(("TRACK_EXIT_ALLOW_WITHOUT_ENTRY",), True)
 TRACK_EXIT_WITHOUT_ENTRY_MIN_FRAMES = max(
     1,
