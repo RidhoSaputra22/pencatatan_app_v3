@@ -53,7 +53,7 @@ const KPI_CONFIG = [
   {
     key: "totalEvents",
     label: "Total Aktivitas",
-    sub: "Seluruh kejadian kunjungan",
+    sub: "Masuk unik + keluar",
     gradient: "from-primary/10 to-primary/5",
     borderColor: "border-l-primary",
     valueColor: "text-primary",
@@ -68,7 +68,7 @@ const KPI_CONFIG = [
   {
     key: "totalIn",
     label: "Pengunjung Masuk",
-    sub: "Total masuk hari ini",
+    sub: "Pengunjung unik periode ini",
     gradient: "from-success/10 to-success/5",
     borderColor: "border-l-success",
     valueColor: "text-success",

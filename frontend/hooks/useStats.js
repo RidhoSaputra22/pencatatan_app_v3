@@ -56,6 +56,21 @@ function aggregateHourly(perSecondData) {
   return { labels, data };
 }
 
+function normalizeEntryStats(row) {
+  if (!row) return row;
+  const uniqueVisitors = Number(row.unique_visitors ?? row.total_in ?? 0);
+  const totalOut = Number(row.total_out ?? 0);
+  return {
+    ...row,
+    total_events: uniqueVisitors + totalOut,
+    total_in: uniqueVisitors,
+  };
+}
+
+function normalizeDailyStats(rows = []) {
+  return rows.map(normalizeEntryStats);
+}
+
 /**
  * Compute insight data from stats.
  */
@@ -139,9 +154,9 @@ export function useStats() {
           fetchDaily(targetDay),
           fetchSummary(yesterday).catch(() => null),
         ]);
-        if (summaryData) setSummary(summaryData);
-        setDaily(dailyData);
-        setYesterdaySummary(yesterdayData);
+        if (summaryData) setSummary(normalizeEntryStats(summaryData));
+        setDaily(normalizeDailyStats(dailyData));
+        setYesterdaySummary(normalizeEntryStats(yesterdayData));
 
         // Fetch per-second data for hourly aggregation (only for today)
         if (filterMode === "today") {
@@ -160,14 +175,15 @@ export function useStats() {
           fetchDaily(null, filterFrom, filterTo),
           fetchSummary(yesterday).catch(() => null),
         ]);
-        setDaily(dailyData);
-        setYesterdaySummary(yesterdayData);
+        const normalizedDailyData = normalizeDailyStats(dailyData);
+        setDaily(normalizedDailyData);
+        setYesterdaySummary(normalizeEntryStats(yesterdayData));
         setSummary({
           date: filterFrom,
-          total_events: dailyData.reduce((s, r) => s + r.total_events, 0),
-          unique_visitors: dailyData.reduce((s, r) => s + r.unique_visitors, 0),
-          total_in: dailyData.reduce((s, r) => s + r.total_in, 0),
-          total_out: dailyData.reduce((s, r) => s + r.total_out, 0),
+          total_events: normalizedDailyData.reduce((s, r) => s + r.total_events, 0),
+          unique_visitors: normalizedDailyData.reduce((s, r) => s + r.unique_visitors, 0),
+          total_in: normalizedDailyData.reduce((s, r) => s + r.total_in, 0),
+          total_out: normalizedDailyData.reduce((s, r) => s + r.total_out, 0),
         });
         setPerSecond([]);
       }
@@ -184,10 +200,10 @@ export function useStats() {
     return () => clearInterval(t);
   }, [load]);
 
-  const totalEvents = summary?.total_events || daily.reduce((s, r) => s + r.total_events, 0);
-  const uniqueVisitors = summary?.unique_visitors || daily.reduce((s, r) => s + r.unique_visitors, 0);
-  const totalIn = summary?.total_in || daily.reduce((s, r) => s + r.total_in, 0);
-  const totalOut = summary?.total_out || daily.reduce((s, r) => s + r.total_out, 0);
+  const totalEvents = summary?.total_events ?? daily.reduce((s, r) => s + r.total_events, 0);
+  const uniqueVisitors = summary?.unique_visitors ?? daily.reduce((s, r) => s + r.unique_visitors, 0);
+  const totalIn = summary?.total_in ?? daily.reduce((s, r) => s + r.total_in, 0);
+  const totalOut = summary?.total_out ?? daily.reduce((s, r) => s + r.total_out, 0);
 
   // Yesterday values for comparison
   const yTotalEvents = yesterdaySummary?.total_events || 0;

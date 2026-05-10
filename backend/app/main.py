@@ -217,6 +217,11 @@ def serialize_employee(employee: Employee) -> EmployeeOut:
     )
 
 
+def dashboard_total_activity(unique_visitors: int, total_out: int) -> int:
+    """Total aktivitas dashboard = masuk unik + keluar."""
+    return int(unique_visitors or 0) + int(total_out or 0)
+
+
 # ==================== Startup Event ====================
 
 @app.on_event("startup")
@@ -1004,13 +1009,14 @@ def ingest_event(payload: EventIn, session: Session = Depends(get_session)):
         )
         session.add(stats)
     
-    stats.total_events += 1
     if is_new_unique:
         stats.unique_visitors += 1
-    if payload.direction == "IN":
-        stats.total_in += 1
-    elif payload.direction == "OUT":
+    # Statistik "masuk" di dashboard mengikuti pengunjung unik harian,
+    # bukan jumlah event IN berulang dari orang yang sama.
+    stats.total_in = stats.unique_visitors
+    if payload.direction == "OUT":
         stats.total_out += 1
+    stats.total_events = dashboard_total_activity(stats.unique_visitors, stats.total_out)
     stats.last_updated_at = datetime.utcnow()
 
     session.commit()
@@ -1044,9 +1050,9 @@ def stats_daily(
     return [DailyStatsOut(
         stat_date=r.stat_date, 
         camera_id=r.camera_id, 
-        total_events=r.total_events,
+        total_events=dashboard_total_activity(r.unique_visitors, r.total_out),
         unique_visitors=r.unique_visitors,
-        total_in=r.total_in, 
+        total_in=r.unique_visitors,
         total_out=r.total_out
     ) for r in rows]
 
@@ -1063,10 +1069,10 @@ def stats_summary(
         select(DailyStats).where(DailyStats.stat_date == target_date)
     ).all()
     
-    total_events = sum(s.total_events for s in stats)
     unique_visitors = sum(s.unique_visitors for s in stats)
-    total_in = sum(s.total_in for s in stats)
+    total_in = unique_visitors
     total_out = sum(s.total_out for s in stats)
+    total_events = dashboard_total_activity(unique_visitors, total_out)
     
     return DashboardSummary(
         date=target_date,
@@ -1092,7 +1098,7 @@ def report_csv(
     
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(["Tanggal", "Camera ID", "Total Event", "Pengunjung Unik", "Masuk", "Keluar"])
+    writer.writerow(["Tanggal", "Camera ID", "Total Aktivitas", "Pengunjung Unik", "Masuk Unik", "Keluar"])
     
     q = select(DailyStats).where(
         DailyStats.stat_date >= from_day, 
@@ -1106,9 +1112,9 @@ def report_csv(
         writer.writerow([
             r.stat_date.isoformat(), 
             r.camera_id, 
-            r.total_events,
+            dashboard_total_activity(r.unique_visitors, r.total_out),
             r.unique_visitors, 
-            r.total_in, 
+            r.unique_visitors,
             r.total_out
         ])
     
@@ -1312,12 +1318,9 @@ def stats_per_second(
     session: Session = Depends(get_session),
     _: User = Depends(require_role("ADMIN", "OPERATOR"))
 ):
-    """Statistik event per detik untuk 1 hari (untuk chart granular)."""
-    from datetime import datetime as dt_cls
-
+    """Statistik aktivitas per detik: masuk unik + keluar."""
     day_str = day.isoformat()
 
-    # Aggregate langsung di SQL — hindari load semua event ke memory
     params = {"day_start": f"{day_str} 00:00:00", "day_end": f"{day_str} 23:59:59"}
     camera_filter = ""
     if camera_id:
@@ -1325,14 +1328,25 @@ def stats_per_second(
         params["camera_id"] = camera_id
 
     sql = text(
-        f"SELECT strftime('%Y-%m-%dT%H:%M:%S', event_time) AS second_key, "
-        f"COUNT(*) AS cnt "
-        f"FROM visit_events "
-        f"WHERE event_time >= :day_start AND event_time <= :day_end "
-        f"AND (person_type IS NULL OR person_type != 'EMPLOYEE') "
+        "SELECT second_key, SUM(cnt) AS cnt "
+        "FROM ("
+        "  SELECT strftime('%Y-%m-%dT%H:%M:%S', first_seen_at) AS second_key, "
+        "         COUNT(*) AS cnt "
+        "  FROM visitor_daily "
+        "  WHERE first_seen_at >= :day_start AND first_seen_at <= :day_end "
+        "  GROUP BY second_key "
+        "  UNION ALL "
+        "  SELECT strftime('%Y-%m-%dT%H:%M:%S', event_time) AS second_key, "
+        "         COUNT(*) AS cnt "
+        "  FROM visit_events "
+        "  WHERE event_time >= :day_start AND event_time <= :day_end "
+        "  AND direction = 'OUT' "
+        "  AND (person_type IS NULL OR person_type != 'EMPLOYEE') "
         f"{camera_filter} "
-        f"GROUP BY second_key "
-        f"ORDER BY second_key"
+        "  GROUP BY second_key "
+        ") activity "
+        "GROUP BY second_key "
+        "ORDER BY second_key"
     )
     rows = session.exec(sql, params=params).all()
     return [{"second": row[0], "count": row[1]} for row in rows]

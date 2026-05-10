@@ -136,9 +136,10 @@ export default function RecordingLibrary() {
               Rekaman CCTV
             </Heading>
             <p className="text-sm leading-6 text-base-content/70">
-              Halaman ini khusus untuk melihat arsip rekaman CCTV yang dibuat otomatis dari hasil
-              video yang sudah diproses. Setiap file berisi segmen rekaman 10 menit dan baru
-              muncul setelah segmennya selesai disimpan.
+              Halaman ini khusus untuk melihat arsip rekaman CCTV yang dibuat
+              otomatis dari hasil video yang sudah diproses. Setiap file berisi
+              segmen rekaman 10 menit dan baru muncul setelah segmennya selesai
+              disimpan.
             </p>
           </div>
 
@@ -160,16 +161,33 @@ export default function RecordingLibrary() {
       </Section>
 
       <div className="grid gap-4 md:grid-cols-3">
-        <Card compact className="border border-base-300 bg-base-100 shadow-none">
-          <p className="text-xs uppercase tracking-[0.18em] text-base-content/50">Total Rekaman</p>
+        <Card
+          compact
+          className="border border-base-300 bg-base-100 shadow-none"
+        >
+          <p className="text-xs uppercase tracking-[0.18em] text-base-content/50">
+            Total Rekaman
+          </p>
           <p className="mt-2 text-3xl font-bold">{summary.totalFiles}</p>
         </Card>
-        <Card compact className="border border-base-300 bg-base-100 shadow-none">
-          <p className="text-xs uppercase tracking-[0.18em] text-base-content/50">Total Ukuran</p>
-          <p className="mt-2 text-3xl font-bold">{formatSize(summary.totalSizeMb)}</p>
+        <Card
+          compact
+          className="border border-base-300 bg-base-100 shadow-none"
+        >
+          <p className="text-xs uppercase tracking-[0.18em] text-base-content/50">
+            Total Ukuran
+          </p>
+          <p className="mt-2 text-3xl font-bold">
+            {formatSize(summary.totalSizeMb)}
+          </p>
         </Card>
-        <Card compact className="border border-base-300 bg-base-100 shadow-none">
-          <p className="text-xs uppercase tracking-[0.18em] text-base-content/50">Rekaman Terbaru</p>
+        <Card
+          compact
+          className="border border-base-300 bg-base-100 shadow-none"
+        >
+          <p className="text-xs uppercase tracking-[0.18em] text-base-content/50">
+            Rekaman Terbaru
+          </p>
           <p className="mt-2 text-sm font-medium text-base-content/80">
             {formatDateTime(summary.latestRecordedUntil)}
           </p>
@@ -184,20 +202,25 @@ export default function RecordingLibrary() {
             </div>
           ) : !selectedRecording ? (
             <div className="flex min-h-[360px] flex-col items-center justify-center rounded-2xl border border-dashed border-base-300 bg-base-200/40 px-6 text-center">
-              <p className="text-lg font-semibold">Belum ada rekaman tersedia</p>
+              <p className="text-lg font-semibold">
+                Belum ada rekaman tersedia
+              </p>
               <p className="mt-2 max-w-lg text-sm text-base-content/60">
-                Biarkan edge worker berjalan sampai satu segmen 10 menit selesai, lalu rekaman akan
-                muncul di halaman ini.
+                Biarkan edge worker berjalan sampai satu segmen 10 menit
+                selesai, lalu rekaman akan muncul di halaman ini.
               </p>
             </div>
           ) : (
             <div className="space-y-4">
               {selectedRecording.preview_ready === false ? (
                 <div className="flex aspect-video w-full flex-col items-center justify-center rounded-2xl border border-base-300 bg-black/70 px-6 text-center text-white">
-                  <p className="text-lg font-semibold">Preview sedang disiapkan</p>
+                  <p className="text-lg font-semibold">
+                    Preview sedang disiapkan
+                  </p>
                   <p className="mt-2 max-w-lg text-sm text-white/70">
-                    Rekaman ini masih dikonversi ke format yang kompatibel dengan browser. Halaman
-                    akan mencoba memuat ulang otomatis beberapa detik lagi.
+                    Rekaman ini masih dikonversi ke format yang kompatibel
+                    dengan browser. Halaman akan mencoba memuat ulang otomatis
+                    beberapa detik lagi.
                   </p>
                 </div>
               ) : (
@@ -229,13 +252,17 @@ export default function RecordingLibrary() {
                   <p className="text-xs uppercase tracking-[0.18em] text-base-content/50">
                     Nama File
                   </p>
-                  <p className="mt-1 break-all text-sm font-medium">{selectedRecording.filename}</p>
+                  <p className="mt-1 break-all text-sm font-medium">
+                    {selectedRecording.filename}
+                  </p>
                 </div>
                 <div>
                   <p className="text-xs uppercase tracking-[0.18em] text-base-content/50">
                     Ukuran
                   </p>
-                  <p className="mt-1 text-sm font-medium">{formatSize(selectedRecording.size_mb)}</p>
+                  <p className="mt-1 text-sm font-medium">
+                    {formatSize(selectedRecording.size_mb)}
+                  </p>
                 </div>
                 <div>
                   <p className="text-xs uppercase tracking-[0.18em] text-base-content/50">
@@ -256,9 +283,13 @@ export default function RecordingLibrary() {
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                <Badge type="secondary">Segmen {selectedRecording.segment_minutes || 10} menit</Badge>
+                <Badge type="secondary">
+                  Segmen {selectedRecording.segment_minutes || 10} menit
+                </Badge>
                 {selectedRecording.camera_id && (
-                  <Badge type="ghost">Kamera {selectedRecording.camera_id}</Badge>
+                  <Badge type="ghost">
+                    Kamera {selectedRecording.camera_id}
+                  </Badge>
                 )}
                 <a
                   href={selectedRecordingUrl}
@@ -273,7 +304,10 @@ export default function RecordingLibrary() {
                   size="sm"
                   outline
                   loading={deletingFilename === selectedRecording.filename}
-                  disabled={deletingFilename !== "" && deletingFilename !== selectedRecording.filename}
+                  disabled={
+                    deletingFilename !== "" &&
+                    deletingFilename !== selectedRecording.filename
+                  }
                   onClick={() => handleDelete(selectedRecording.filename)}
                   isSubmit={false}
                 >
@@ -284,9 +318,11 @@ export default function RecordingLibrary() {
           )}
         </Section>
 
-        <Section title="Daftar Rekaman" className="mt-0">
+        <Section title="Daftar Rekaman" className="mt-0 ">
           <div className="mb-3 flex items-center justify-between text-xs text-base-content/55">
-            <span>Menampilkan rekaman otomatis yang sudah selesai disimpan.</span>
+            <span>
+              Menampilkan rekaman otomatis yang sudah selesai disimpan.
+            </span>
             <span>Sinkron terakhir: {formatDateTime(lastSyncedAt)}</span>
           </div>
 
@@ -299,9 +335,10 @@ export default function RecordingLibrary() {
               Belum ada rekaman CCTV yang bisa ditampilkan.
             </p>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-3 h-96 overflow-y-scroll">
               {recordings.map((recording) => {
-                const active = selectedRecording?.filename === recording.filename;
+                const active =
+                  selectedRecording?.filename === recording.filename;
                 return (
                   <button
                     key={recording.filename}
@@ -319,7 +356,9 @@ export default function RecordingLibrary() {
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <p className="truncate text-sm font-semibold">{recording.filename}</p>
+                          <p className="truncate text-sm font-semibold">
+                            {recording.filename}
+                          </p>
                           <Badge type="secondary" size="sm">
                             Rekaman Otomatis
                           </Badge>
@@ -335,10 +374,15 @@ export default function RecordingLibrary() {
                           )}
                         </div>
                         <div className="mt-2 space-y-1 text-xs text-base-content/60">
-                          <p>Mulai: {formatDateTime(recording.recorded_from)}</p>
-                          <p>Selesai: {formatDateTime(recording.recorded_until)}</p>
                           <p>
-                            Ukuran: {formatSize(recording.size_mb)} | Kamera {recording.camera_id || "-"}
+                            Mulai: {formatDateTime(recording.recorded_from)}
+                          </p>
+                          <p>
+                            Selesai: {formatDateTime(recording.recorded_until)}
+                          </p>
+                          <p>
+                            Ukuran: {formatSize(recording.size_mb)} | Kamera{" "}
+                            {recording.camera_id || "-"}
                           </p>
                         </div>
                       </div>
@@ -360,7 +404,10 @@ export default function RecordingLibrary() {
                           size="xs"
                           outline
                           loading={deletingFilename === recording.filename}
-                          disabled={deletingFilename !== "" && deletingFilename !== recording.filename}
+                          disabled={
+                            deletingFilename !== "" &&
+                            deletingFilename !== recording.filename
+                          }
                           onClick={() => handleDelete(recording.filename)}
                           isSubmit={false}
                         >

@@ -116,7 +116,7 @@ export function StackedBarChart({ labels, dataIn, dataOut }) {
     labels,
     datasets: [
       {
-        label: "Pengunjung Masuk",
+        label: "Masuk Unik",
         data: dataIn,
         backgroundColor: "rgba(34, 197, 94, 0.85)",
         hoverBackgroundColor: "#22c55e",
@@ -188,7 +188,7 @@ export function InOutDoughnutChart({ totalIn, totalOut }) {
   const outPercent = total > 0 ? 100 - inPercent : 0;
 
   const chartData = {
-    labels: ["Masuk", "Keluar"],
+    labels: ["Masuk Unik", "Keluar"],
     datasets: [
       {
         data: [totalIn, totalOut],
@@ -229,14 +229,14 @@ export function InOutDoughnutChart({ totalIn, totalOut }) {
         <Doughnut data={chartData} options={options} />
         <div className="absolute inset-0 flex flex-col items-center justify-center">
           <span className="text-2xl font-extrabold text-base-content">{inPercent}%</span>
-          <span className="text-xs text-base-content/50 font-medium">Masuk</span>
+          <span className="text-xs text-base-content/50 font-medium">Masuk Unik</span>
         </div>
       </div>
       <div className="flex gap-6 text-sm">
         <div className="flex items-center gap-2">
           <span className="w-3 h-3 rounded-full bg-success"></span>
           <span className="font-semibold text-success">{inPercent}%</span>
-          <span className="text-base-content/50">Masuk</span>
+          <span className="text-base-content/50">Masuk Unik</span>
         </div>
         <div className="flex items-center gap-2">
           <span className="w-3 h-3 rounded-full bg-error"></span>
@@ -341,7 +341,7 @@ export function AreaChart({ labels, dataIn, dataOut }) {
     labels,
     datasets: [
       {
-        label: "Masuk",
+        label: "Masuk Unik",
         data: dataIn,
         fill: true,
         borderColor: "#22c55e",
@@ -479,7 +479,7 @@ export function RadarChart({ labels, dataIn, dataOut }) {
     labels,
     datasets: [
       {
-        label: "Masuk",
+        label: "Masuk Unik",
         data: dataIn,
         backgroundColor: "rgba(34, 197, 94, 0.15)",
         borderColor: "#22c55e",

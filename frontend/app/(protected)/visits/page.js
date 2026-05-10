@@ -216,10 +216,10 @@ export default function VisitsPage() {
   const day = fromDate === toDate ? fromDate : `${fromDate} s/d ${toDate}`;
   const customerEvents = events.filter((e) => e.person_type !== "EMPLOYEE");
   const ignoredEmployeeEvents = events.filter((e) => e.person_type === "EMPLOYEE").length;
-  const totalEvents = customerEvents.length;
   const uniqueVisitors = visitors.length;
-  const totalIn = customerEvents.filter((e) => e.direction === "IN").length;
+  const totalIn = uniqueVisitors;
   const totalOut = customerEvents.filter((e) => e.direction === "OUT").length;
+  const totalEvents = totalIn + totalOut;
   const filteredEventEmployees = filteredEvents.filter(
     (event) => event.person_type === "EMPLOYEE",
   ).length;

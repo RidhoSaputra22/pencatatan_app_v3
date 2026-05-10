@@ -118,7 +118,7 @@ export default function StatsTable({ daily = [] }) {
           </div>
           <div className="bg-success/5 rounded-lg px-3 py-2.5 text-center">
             <p className="text-lg font-bold text-success">{formatNumber(totalIn)}</p>
-            <p className="text-[10px] text-base-content/40 font-medium">Total Masuk</p>
+            <p className="text-[10px] text-base-content/40 font-medium">Masuk Unik</p>
           </div>
           <div className="bg-error/5 rounded-lg px-3 py-2.5 text-center">
             <p className="text-lg font-bold text-error">{formatNumber(totalOut)}</p>
