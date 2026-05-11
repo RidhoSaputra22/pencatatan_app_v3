@@ -26,15 +26,20 @@ die() {
 usage() {
   cat <<'EOF'
 Pemakaian:
-  ./run.sh [start|restart|stop|delete|status|logs]
+  ./run.sh [start|restart|stop|delete|delete-harian|delete-daily|status|logs]
+  ./run.sh delete-harian [YYYY-MM-DD] [--yes]
+  ./run.sh delete-daily [YYYY-MM-DD] [--yes]
+  ./run.sh delete harian [YYYY-MM-DD] [--yes]
 
 Perintah:
-  start    Menyalakan frontend, backend, dan edge via PM2
-  restart  Restart semua service (akan dibuat ulang jika belum ada)
-  stop     Stop semua service tanpa menghapusnya dari PM2
-  delete   Hapus semua service dari PM2
-  status   Tampilkan status service PM2
-  logs     Tampilkan log ketiga service
+  start          Menyalakan frontend, backend, dan edge via PM2
+  restart        Restart semua service (akan dibuat ulang jika belum ada)
+  stop           Stop semua service tanpa menghapusnya dari PM2
+  delete         Hapus semua service dari PM2
+  delete-harian  Hapus data visitor untuk satu tanggal (default: hari ini)
+  delete-daily   Alias untuk delete-harian
+  status         Tampilkan status service PM2
+  logs           Tampilkan log ketiga service
 
 Environment opsional:
   FRONTEND_SCRIPT=dev|start
@@ -122,6 +127,130 @@ find_uvicorn() {
   fi
 
   return 1
+}
+
+delete_daily_usage() {
+  cat <<'EOF'
+Pemakaian:
+  ./run.sh delete-harian [YYYY-MM-DD] [--yes]
+  ./run.sh delete-daily [YYYY-MM-DD] [--yes]
+  ./run.sh delete harian [YYYY-MM-DD] [--yes]
+
+Contoh:
+  ./run.sh delete-harian
+  ./run.sh delete-harian 2026-05-11
+  ./run.sh delete harian 2026-05-11 --yes
+EOF
+}
+
+confirm_delete_daily() {
+  local day="$1"
+  local yes="$2"
+  local answer
+
+  if [[ "$yes" == "true" ]]; then
+    return 0
+  fi
+
+  if [[ ! -t 0 ]]; then
+    die "Aksi ini butuh konfirmasi. Jalankan lagi dengan --yes untuk mode non-interaktif."
+  fi
+
+  read -r -p "Hapus data visitor untuk tanggal $day? Ketik 'YA' untuk lanjut: " answer
+  [[ "$answer" == "YA" ]] || die "Delete harian dibatalkan."
+}
+
+validate_daily_date() {
+  local python_bin="$1"
+  local day="$2"
+
+  "$python_bin" - "$day" <<'PY'
+import sys
+from datetime import date
+
+try:
+    date.fromisoformat(sys.argv[1])
+except ValueError:
+    raise SystemExit(f"Format tanggal tidak valid: {sys.argv[1]}. Gunakan YYYY-MM-DD.")
+PY
+}
+
+delete_daily_data() {
+  local day=""
+  local yes="false"
+  local arg backend_python
+
+  for arg in "$@"; do
+    case "$arg" in
+      -y|--yes)
+        yes="true"
+        ;;
+      -h|--help|help)
+        delete_daily_usage
+        return 0
+        ;;
+      *)
+        if [[ -n "$day" ]]; then
+          delete_daily_usage
+          die "Terlalu banyak argumen untuk delete harian."
+        fi
+        day="$arg"
+        ;;
+    esac
+  done
+
+  day="${day:-$(date +%F)}"
+  if [[ ! "$day" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    delete_daily_usage
+    die "Format tanggal tidak valid: $day. Gunakan YYYY-MM-DD."
+  fi
+
+  backend_python="$(find_python "$BACKEND_DIR")" || die "Python backend tidak ditemukan."
+  validate_daily_date "$backend_python" "$day"
+  confirm_delete_daily "$day" "$yes"
+
+  log "Menghapus data visitor harian untuk $day"
+  (
+    cd "$BACKEND_DIR"
+    "$backend_python" - "$day" <<'PY'
+import sys
+from datetime import date
+
+from sqlalchemy import delete, func
+from sqlmodel import Session
+
+from app.db import engine
+from app.models import DailyStats, VisitEvent, VisitorDaily
+
+try:
+    target_day = date.fromisoformat(sys.argv[1])
+except ValueError:
+    raise SystemExit(f"Format tanggal tidak valid: {sys.argv[1]}. Gunakan YYYY-MM-DD.")
+
+day_label = target_day.isoformat()
+
+with Session(engine) as session:
+    try:
+        visit_events_deleted = session.exec(
+            delete(VisitEvent).where(func.date(VisitEvent.event_time) == day_label)
+        )
+        visitor_daily_deleted = session.exec(
+            delete(VisitorDaily).where(VisitorDaily.visit_date == target_day)
+        )
+        daily_stats_deleted = session.exec(
+            delete(DailyStats).where(DailyStats.stat_date == target_day)
+        )
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+
+print(f"[run.sh] Data visitor {day_label} berhasil dihapus:")
+print(f"[run.sh] - visit_events  : {max(int(visit_events_deleted.rowcount or 0), 0)}")
+print(f"[run.sh] - visitor_daily : {max(int(visitor_daily_deleted.rowcount or 0), 0)}")
+print(f"[run.sh] - daily_stats   : {max(int(daily_stats_deleted.rowcount or 0), 0)}")
+PY
+  )
 }
 
 pm2_has_process() {
@@ -259,7 +388,16 @@ main() {
       stop_services
       ;;
     delete)
-      delete_services
+      if [[ "${2:-}" == "harian" || "${2:-}" == "daily" ]]; then
+        shift 2
+        delete_daily_data "$@"
+      else
+        delete_services
+      fi
+      ;;
+    delete-harian|delete-daily)
+      shift
+      delete_daily_data "$@"
       ;;
     status)
       show_status
