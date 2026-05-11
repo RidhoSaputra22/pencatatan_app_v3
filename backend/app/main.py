@@ -1443,6 +1443,10 @@ def _serialize_footage_file(file_path: Path) -> dict:
     return payload
 
 
+def _is_pending_recording_file(file_path: Path) -> bool:
+    return file_path.name.endswith(".partial.mp4") or file_path.name.endswith(".optimizing.mp4")
+
+
 def _list_serialized_footage(*, auto_only: bool = False) -> List[dict]:
     files: List[dict] = []
     sorted_files = sorted(FOOTAGE_DIR.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True)
@@ -1451,7 +1455,7 @@ def _list_serialized_footage(*, auto_only: bool = False) -> List[dict]:
             continue
         if file_path.suffix.lower() not in ALLOWED_VIDEO_EXTENSIONS:
             continue
-        if file_path.name.endswith(".partial.mp4"):
+        if _is_pending_recording_file(file_path):
             continue
 
         serialized = _serialize_footage_file(file_path)
@@ -1469,7 +1473,7 @@ def _recording_files_for_date(recording_date: date) -> List[Path]:
             continue
         if file_path.suffix.lower() not in ALLOWED_VIDEO_EXTENSIONS:
             continue
-        if file_path.name.endswith(".partial.mp4"):
+        if _is_pending_recording_file(file_path):
             continue
 
         recording_meta = _parse_recording_metadata(file_path.name)
