@@ -33,6 +33,7 @@ from .config import (
     EDGE_RECORDING_FPS,
     EDGE_RECORDING_MAX_GAP_SECONDS,
     EDGE_RECORDING_OUTPUT_DIR,
+    EDGE_RECORDING_SAVE_MODE,
     EDGE_RECORDING_SEGMENT_MINUTES,
     EDGE_RECORDING_SEGMENT_SECONDS,
     EDGE_STREAM_JPEG_QUALITY,
@@ -94,6 +95,13 @@ _TRACKER_REBUILD_KEYS = {
     "TRACK_N_INIT",
     "TRACK_MAX_DISTANCE",
     "TRACK_MAX_COSINE_DISTANCE",
+}
+_RECORDING_REBUILD_KEYS = {
+    "EDGE_RECORDING_ENABLED",
+    "EDGE_RECORDING_SAVE_MODE",
+    "EDGE_RECORDING_SEGMENT_MINUTES",
+    "EDGE_RECORDING_FPS",
+    "EDGE_RECORDING_MAX_GAP_SECONDS",
 }
 
 
@@ -190,14 +198,17 @@ def _apply_runtime_config(payload: Dict[str, Any], model: Any) -> Dict[str, Any]
 
     changed: List[str] = []
     tracker_rebuild = False
+    recording_rebuild = False
 
     def mark(key: str, did_change: bool) -> None:
-        nonlocal tracker_rebuild
+        nonlocal tracker_rebuild, recording_rebuild
         if not did_change:
             return
         changed.append(key)
         if key in _TRACKER_REBUILD_KEYS:
             tracker_rebuild = True
+        if key in _RECORDING_REBUILD_KEYS:
+            recording_rebuild = True
 
     if "EDGE_STREAM_URL" in values:
         stream_url_value = str(values.get("EDGE_STREAM_URL") or "").strip()
@@ -251,6 +262,53 @@ def _apply_runtime_config(payload: Dict[str, Any], model: Any) -> Dict[str, Any]
                 replay_events,
                 (config_module,),
             ),
+        )
+
+    if "EDGE_RECORDING_ENABLED" in values:
+        recording_enabled = _runtime_bool(values["EDGE_RECORDING_ENABLED"], EDGE_RECORDING_ENABLED)
+        mark(
+            "EDGE_RECORDING_ENABLED",
+            _set_across_modules("EDGE_RECORDING_ENABLED", recording_enabled, (config_module,)),
+        )
+
+    if "EDGE_RECORDING_SAVE_MODE" in values:
+        recording_mode = config_module.normalize_recording_save_mode(
+            str(values["EDGE_RECORDING_SAVE_MODE"] or "detection")
+        )
+        mark(
+            "EDGE_RECORDING_SAVE_MODE",
+            _set_across_modules("EDGE_RECORDING_SAVE_MODE", recording_mode, (config_module,)),
+        )
+
+    if "EDGE_RECORDING_SEGMENT_MINUTES" in values:
+        segment_minutes = _runtime_int(
+            values["EDGE_RECORDING_SEGMENT_MINUTES"],
+            EDGE_RECORDING_SEGMENT_MINUTES,
+            minimum=1,
+        )
+        did_change = _set_across_modules("EDGE_RECORDING_SEGMENT_MINUTES", segment_minutes, (config_module,))
+        did_change = (
+            _set_across_modules("EDGE_RECORDING_SEGMENT_SECONDS", segment_minutes * 60, (config_module,))
+            or did_change
+        )
+        mark("EDGE_RECORDING_SEGMENT_MINUTES", did_change)
+
+    if "EDGE_RECORDING_FPS" in values:
+        recording_fps = _runtime_float(values["EDGE_RECORDING_FPS"], EDGE_RECORDING_FPS, minimum=0.0)
+        mark(
+            "EDGE_RECORDING_FPS",
+            _set_across_modules("EDGE_RECORDING_FPS", recording_fps, (config_module,)),
+        )
+
+    if "EDGE_RECORDING_MAX_GAP_SECONDS" in values:
+        recording_gap = _runtime_float(
+            values["EDGE_RECORDING_MAX_GAP_SECONDS"],
+            EDGE_RECORDING_MAX_GAP_SECONDS,
+            minimum=1.0,
+        )
+        mark(
+            "EDGE_RECORDING_MAX_GAP_SECONDS",
+            _set_across_modules("EDGE_RECORDING_MAX_GAP_SECONDS", recording_gap, (config_module,)),
         )
 
     if "YOLO_BACKEND" in values:
@@ -486,6 +544,7 @@ def _apply_runtime_config(payload: Dict[str, Any], model: Any) -> Dict[str, Any]
 
     return {
         "tracker_rebuild": tracker_rebuild,
+        "recording_rebuild": recording_rebuild,
         "changed": changed,
         "stream_url": str(values.get("EDGE_STREAM_URL") or "").strip(),
     }
@@ -889,6 +948,30 @@ def _recording_fps() -> float:
     return 12.0
 
 
+def _build_backup_recorder() -> SegmentedVideoRecorder:
+    recorder = SegmentedVideoRecorder(
+        output_dir=EDGE_RECORDING_OUTPUT_DIR,
+        camera_id=CAMERA_ID,
+        segment_seconds=float(EDGE_RECORDING_SEGMENT_SECONDS),
+        fps=_recording_fps(),
+        enabled=EDGE_RECORDING_ENABLED,
+        max_gap_seconds=EDGE_RECORDING_MAX_GAP_SECONDS,
+        file_prefix=EDGE_RECORDING_FILE_PREFIX,
+    )
+
+    if recorder.enabled:
+        log.info(
+            "CCTV recording active: mode=%s, every %d minute(s) -> %s",
+            EDGE_RECORDING_SAVE_MODE,
+            EDGE_RECORDING_SEGMENT_MINUTES,
+            EDGE_RECORDING_OUTPUT_DIR,
+        )
+    else:
+        log.info("CCTV recording disabled")
+
+    return recorder
+
+
 def _resolve_identity_embedding(face_recognizer: EmployeeFaceRecognizer, track) -> Optional[np.ndarray]:
     mode = IDENTITY_MODE
     if mode == "face":
@@ -1001,22 +1084,7 @@ def real_loop():
     frame_h = TEST_FRAME_HEIGHT
     output_writer = None
     output_video_path = None
-    backup_recorder = SegmentedVideoRecorder(
-        output_dir=EDGE_RECORDING_OUTPUT_DIR,
-        camera_id=CAMERA_ID,
-        segment_seconds=float(EDGE_RECORDING_SEGMENT_SECONDS),
-        fps=_recording_fps(),
-        enabled=EDGE_RECORDING_ENABLED,
-        max_gap_seconds=EDGE_RECORDING_MAX_GAP_SECONDS,
-        file_prefix=EDGE_RECORDING_FILE_PREFIX,
-    )
-
-    if backup_recorder.enabled:
-        log.info(
-            "YOLO backup active: every %d minute(s) -> %s",
-            EDGE_RECORDING_SEGMENT_MINUTES,
-            EDGE_RECORDING_OUTPUT_DIR,
-        )
+    backup_recorder = _build_backup_recorder()
 
     # Processing cadence is independent from stream cadence; the stream layer can
     # duplicate the latest annotated frame between inference updates.
@@ -1048,6 +1116,9 @@ def real_loop():
                     tracker, tracker_mode = _build_tracker()
                     visitor_states = {}
                     log.info("Tracker rebuilt after runtime config update (%s)", tracker_mode)
+                if runtime_apply.get("recording_rebuild"):
+                    backup_recorder.close()
+                    backup_recorder = _build_backup_recorder()
                 target_frame_time = 1.0 / EDGE_PROCESSING_MAX_FPS if EDGE_PROCESSING_MAX_FPS > 0 else 0.0
 
                 if not is_video_test:
@@ -1179,8 +1250,12 @@ def real_loop():
                     float(getattr(cap, "source_fps", 0.0)),
                 )
 
-            # Keep raw frame before drawing overlay.
-            raw_frame = frame.copy() if has_raw_stream_clients() else None
+            # Keep a clean frame before drawing overlay when a raw stream or raw recording needs it.
+            raw_frame = (
+                frame.copy()
+                if has_raw_stream_clients() or EDGE_RECORDING_SAVE_MODE == "raw"
+                else None
+            )
             display_frame = frame
 
             results = model(frame, size=IMG_SIZE)
@@ -1707,7 +1782,8 @@ def real_loop():
             update_latest_frame(display_frame, raw_frame=raw_frame)
             if output_writer is not None:
                 output_writer.write(display_frame)
-            backup_recorder.write(display_frame, frame_ts=now_ts)
+            recording_frame = raw_frame if EDGE_RECORDING_SAVE_MODE == "raw" and raw_frame is not None else display_frame
+            backup_recorder.write(recording_frame, frame_ts=now_ts)
 
             processed_frames += 1
             if is_video_test:

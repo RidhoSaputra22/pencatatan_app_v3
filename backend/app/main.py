@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 from sqlalchemy import delete, func, or_, text
 from sqlmodel import Session, select
@@ -47,7 +48,9 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
+import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
@@ -1458,6 +1461,26 @@ def _list_serialized_footage(*, auto_only: bool = False) -> List[dict]:
     return files
 
 
+def _recording_files_for_date(recording_date: date) -> List[Path]:
+    files: List[Path] = []
+    sorted_files = sorted(FOOTAGE_DIR.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True)
+    for file_path in sorted_files:
+        if not file_path.is_file():
+            continue
+        if file_path.suffix.lower() not in ALLOWED_VIDEO_EXTENSIONS:
+            continue
+        if file_path.name.endswith(".partial.mp4"):
+            continue
+
+        recording_meta = _parse_recording_metadata(file_path.name)
+        if not recording_meta:
+            continue
+        if recording_meta["recorded_from"].date() != recording_date:
+            continue
+        files.append(file_path)
+    return files
+
+
 def _recording_preview_lock(filename: str) -> threading.Lock:
     with _preview_locks_guard:
         lock = _preview_locks.get(filename)
@@ -1468,6 +1491,7 @@ def _recording_preview_lock(filename: str) -> threading.Lock:
 
 
 def _recording_preview_path(filename: str) -> Path:
+    RECORDING_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
     return RECORDING_PREVIEW_DIR / f"{Path(filename).stem}.browser.mp4"
 
 
@@ -1523,6 +1547,7 @@ def _transcode_preview_file(source_path: Path, preview_path: Path) -> None:
     if not ffmpeg_binary:
         raise RuntimeError("ffmpeg belum terpasang di server, jadi preview browser belum bisa dibuat")
 
+    preview_path.parent.mkdir(parents=True, exist_ok=True)
     temp_preview_path = preview_path.with_suffix(".tmp.mp4")
     temp_preview_path.unlink(missing_ok=True)
 
@@ -1570,6 +1595,37 @@ def _ensure_browser_playable_recording(file_path: Path) -> Path:
             return preview_path
         _transcode_preview_file(file_path, preview_path)
     return preview_path
+
+
+def _parse_recording_date_or_400(recording_date: str) -> date:
+    try:
+        return date.fromisoformat(recording_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Format tanggal harus YYYY-MM-DD") from exc
+
+
+def _build_recording_archive(recording_date: date, files: List[Path]) -> Path:
+    fd, temp_path = tempfile.mkstemp(
+        prefix=f"recordings_{recording_date.isoformat()}_",
+        suffix=".zip",
+    )
+    os.close(fd)
+    archive_path = Path(temp_path)
+
+    with zipfile.ZipFile(
+        archive_path,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=6,
+    ) as archive:
+        for file_path in files:
+            archive.write(file_path, arcname=file_path.name)
+
+    return archive_path
+
+
+def _cleanup_temp_file(path_str: str) -> None:
+    Path(path_str).unlink(missing_ok=True)
 
 
 @app.post("/api/footage/upload")
@@ -1651,6 +1707,27 @@ def list_recordings(_: User = Depends(require_role("ADMIN", "OPERATOR"))):
     return _list_serialized_footage(auto_only=True)
 
 
+@app.get("/api/recordings/archive/{recording_date}/download")
+def download_recordings_by_date(
+    recording_date: str,
+    _: User = Depends(require_role("ADMIN", "OPERATOR")),
+):
+    """Download semua rekaman pada tanggal tertentu sebagai file ZIP."""
+    parsed_date = _parse_recording_date_or_400(recording_date)
+    files = _recording_files_for_date(parsed_date)
+    if not files:
+        raise HTTPException(status_code=404, detail="Tidak ada rekaman pada tanggal tersebut")
+
+    archive_path = _build_recording_archive(parsed_date, files)
+    archive_name = f"arsip_rekaman_{parsed_date.isoformat()}.zip"
+    return FileResponse(
+        path=archive_path,
+        media_type="application/zip",
+        filename=archive_name,
+        background=BackgroundTask(_cleanup_temp_file, str(archive_path)),
+    )
+
+
 @app.get("/api/recordings/{filename}/media")
 def stream_recording_media(
     filename: str,
@@ -1676,6 +1753,32 @@ def stream_recording_media(
 
     return FileResponse(
         path=media_path,
+        media_type="video/mp4",
+        filename=file_path.name,
+    )
+
+
+@app.get("/api/recordings/{filename}/download")
+def download_recording_file(
+    filename: str,
+    _: User = Depends(require_role("ADMIN", "OPERATOR")),
+):
+    """Download file rekaman asli tanpa transcode preview browser."""
+    if not re.match(r"^[\w\-. ]+$", filename):
+        raise HTTPException(status_code=400, detail="Nama file tidak valid")
+
+    if _parse_recording_metadata(filename) is None:
+        raise HTTPException(status_code=400, detail="File bukan rekaman otomatis CCTV")
+
+    file_path = FOOTAGE_DIR / filename
+    if not file_path.resolve().parent == FOOTAGE_DIR.resolve():
+        raise HTTPException(status_code=400, detail="Path tidak valid")
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File tidak ditemukan")
+
+    return FileResponse(
+        path=file_path,
         media_type="video/mp4",
         filename=file_path.name,
     )
@@ -1743,7 +1846,11 @@ def delete_recording(
             detail=f"File sedang digunakan oleh kamera: {cam_names}. Ubah sumber kamera terlebih dahulu.",
         )
 
+    preview_path = _recording_preview_path(filename)
+    preview_temp_path = preview_path.with_suffix(".tmp.mp4")
     file_path.unlink()
+    preview_path.unlink(missing_ok=True)
+    preview_temp_path.unlink(missing_ok=True)
     return {"ok": True, "message": f"Rekaman '{filename}' berhasil dihapus"}
 
 

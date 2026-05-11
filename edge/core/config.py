@@ -139,6 +139,19 @@ def env_bool_required(name: str) -> bool:
     return env_required(name).lower() in {"1", "true", "yes", "on"}
 
 
+def normalize_recording_save_mode(value: str) -> str:
+    raw = (value or "").strip().lower()
+    aliases = {
+        "detect": "detection",
+        "deteksi": "detection",
+        "processed": "detection",
+        "overlay": "detection",
+        "with_detection": "detection",
+        "clean": "raw",
+    }
+    return aliases.get(raw, raw if raw in {"detection", "raw"} else "detection")
+
+
 def _optional_project_path(value: str) -> str:
     raw = (value or "").strip()
     return resolve_project_path(raw) if raw else ""
@@ -216,6 +229,7 @@ EDGE_RECORDING_SEGMENT_SECONDS = EDGE_RECORDING_SEGMENT_MINUTES * 60
 EDGE_RECORDING_FPS = max(0.0, env_float("EDGE_RECORDING_FPS", 0.0))
 EDGE_RECORDING_MAX_GAP_SECONDS = max(1.0, env_float("EDGE_RECORDING_MAX_GAP_SECONDS", 5.0))
 EDGE_RECORDING_FILE_PREFIX = env("EDGE_RECORDING_FILE_PREFIX", "cctv_recording").strip() or "cctv_recording"
+EDGE_RECORDING_SAVE_MODE = normalize_recording_save_mode(env("EDGE_RECORDING_SAVE_MODE", "detection"))
 
 # YOLO configuration
 # YOLO_BACKEND: "yolov5" (torch.hub) | "ultralytics" (YOLOv8/v9/v10/v11 via ultralytics package)

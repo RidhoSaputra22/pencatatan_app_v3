@@ -13,6 +13,8 @@ import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import Heading from "@/components/ui/Heading";
 
+const SETTINGS_HIDDEN_GROUP_IDS = new Set(["recording"]);
+
 function isTruthy(value) {
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
 }
@@ -179,7 +181,14 @@ export default function SettingsPage() {
       setConfig(data);
       setValues(data.values || {});
       setOriginalValues(data.values || {});
-      setActiveGroup((current) => current || data.groups?.[0]?.id || "");
+      const visibleGroups = (data.groups || []).filter(
+        (group) => !SETTINGS_HIDDEN_GROUP_IDS.has(group.id),
+      );
+      setActiveGroup((current) =>
+        current && visibleGroups.some((group) => group.id === current)
+          ? current
+          : visibleGroups[0]?.id || "",
+      );
       setSaveResult(null);
     } catch (err) {
       setError(err.message || "Gagal memuat konfigurasi runtime.");
@@ -193,19 +202,28 @@ export default function SettingsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
 
-  const itemsByGroup = useMemo(() => groupItems(config?.items || []), [config]);
+  const visibleGroups = useMemo(
+    () => (config?.groups || []).filter((group) => !SETTINGS_HIDDEN_GROUP_IDS.has(group.id)),
+    [config],
+  );
+  const visibleItems = useMemo(
+    () =>
+      (config?.items || []).filter((item) => !SETTINGS_HIDDEN_GROUP_IDS.has(item.group)),
+    [config],
+  );
+  const itemsByGroup = useMemo(() => groupItems(visibleItems), [visibleItems]);
   const changedValues = useMemo(() => {
     const changed = {};
-    for (const item of config?.items || []) {
+    for (const item of visibleItems) {
       if (String(values[item.key] ?? "") !== String(originalValues[item.key] ?? "")) {
         changed[item.key] = values[item.key] ?? "";
       }
     }
     return changed;
-  }, [config, values, originalValues]);
+  }, [visibleItems, values, originalValues]);
 
   const changedCount = Object.keys(changedValues).length;
-  const hasRestartChange = (config?.items || []).some(
+  const hasRestartChange = visibleItems.some(
     (item) => item.restart_required && Object.prototype.hasOwnProperty.call(changedValues, item.key),
   );
 
@@ -316,7 +334,7 @@ export default function SettingsPage() {
       </Card>
 
       <div className="tabs tabs-boxed mb-5 w-full overflow-x-auto rounded-md bg-base-100 p-1">
-        {(config?.groups || []).map((group) => (
+        {visibleGroups.map((group) => (
           <button
             key={group.id}
             type="button"
@@ -336,7 +354,7 @@ export default function SettingsPage() {
             </div>
           </Card>
         ) : (
-          (config?.groups || [])
+          visibleGroups
             .filter((group) => group.id === activeGroup)
             .map((group) => (
               <Card key={group.id}>

@@ -200,6 +200,7 @@ EDGE_STREAM_URL=http://192.168.1.50:8081/video
 
 Konfigurasi utama:
 - `EDGE_RECORDING_ENABLED=true` untuk mengaktifkan backup otomatis.
+- `EDGE_RECORDING_SAVE_MODE=detection` menyimpan overlay deteksi; gunakan `raw` untuk menyimpan frame bersih tanpa bbox/ROI.
 - `EDGE_RECORDING_SEGMENT_MINUTES=10` untuk durasi setiap segmen backup.
 - `EDGE_RECORDING_FPS=0` berarti mengikuti `EDGE_PROCESSING_MAX_FPS`; jika ingin paksa FPS tertentu, isi misalnya `12`.
 
