@@ -158,7 +158,7 @@ rstp.sh
 !frontend/public/images/logo.png
 cctv-ukip*.mp4
 yolo_lab/*
-*.txt
+revisi.txt
 
 # Keep frontend source folders named "recordings" tracked
 !frontend/app/(protected)/recordings/
