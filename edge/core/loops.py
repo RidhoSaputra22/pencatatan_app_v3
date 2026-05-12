@@ -1065,6 +1065,12 @@ def real_loop():
         )
 
     tracker, tracker_mode = _build_tracker()
+    if IDENTITY_MODE == "reid" and tracker_mode == "CentroidTracker":
+        log.warning(
+            "IDENTITY_MODE=reid berjalan di CentroidTracker. "
+            "Embedding ReID tidak tersedia, visitor_key fallback ke track-id, "
+            "dan hitungan unik bisa membengkak saat stream relay tidak stabil."
+        )
 
     last_cfg_fetch = 0.0
     roi = None

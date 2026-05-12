@@ -25,6 +25,7 @@ Opsi:
   --max-fps     : Batas FPS pengiriman (default: 15)
   --width       : Resize width sebelum kirim (default: 1280)
   --height      : Resize height sebelum kirim (default: 720)
+  --max-packet  : Maks payload UDP per chunk (default: 1200, disarankan WAN)
   --loop        : Loop video file jika habis
 """
 import argparse
@@ -38,9 +39,12 @@ import cv2
 import numpy as np
 
 
-# Maximum safe UDP payload (~65507 bytes minus headers).
-# We split large frames into chunks.
-MAX_UDP_PACKET = 60000
+# UDP payload guidance:
+# - 60000 bytes works on LAN but usually gets fragmented heavily over WAN/public internet.
+# - Fragmentation loss causes many dropped frames, unstable tracking, and overcounting.
+# - Use MTU-friendly payload by default so each UDP datagram fits in one packet.
+DEFAULT_MAX_UDP_PACKET = 1200
+MAX_UDP_PACKET_LIMIT = 60000
 
 
 def open_source(source: str):
@@ -71,6 +75,7 @@ def stream_to_server(
     width: int = 1280,
     height: int = 720,
     loop: bool = True,
+    max_packet: int = DEFAULT_MAX_UDP_PACKET,
 ):
     """Capture frames from source and send them via UDP to the server."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -83,6 +88,7 @@ def stream_to_server(
     print(f"[client] Max FPS      : {max_fps}")
     print(f"[client] Resolution   : {width}x{height}")
     print(f"[client] Loop file    : {loop}")
+    print(f"[client] UDP packet   : {max_packet} bytes")
     print()
 
     file_mode = is_file_source(source)
@@ -132,10 +138,10 @@ def stream_to_server(
 
             # Send frame as UDP chunks
             # Header format: [frame_id (4B)][total_chunks (2B)][chunk_idx (2B)][data]
-            total_chunks = (data_len + MAX_UDP_PACKET - 1) // MAX_UDP_PACKET
+            total_chunks = (data_len + max_packet - 1) // max_packet
             for i in range(total_chunks):
-                start = i * MAX_UDP_PACKET
-                end = min(start + MAX_UDP_PACKET, data_len)
+                start = i * max_packet
+                end = min(start + max_packet, data_len)
                 chunk = data[start:end]
 
                 header = struct.pack("!IHH", frame_id % (2**32), total_chunks, i)
@@ -172,9 +178,26 @@ def main():
     parser.add_argument("--max-fps", type=int, default=15, help="Batas FPS pengiriman")
     parser.add_argument("--width", type=int, default=1280, help="Resize width")
     parser.add_argument("--height", type=int, default=720, help="Resize height")
+    parser.add_argument(
+        "--max-packet",
+        type=int,
+        default=DEFAULT_MAX_UDP_PACKET,
+        help=(
+            "Ukuran maksimum payload UDP per chunk. "
+            "Gunakan 1000-1400 untuk koneksi internet/WAN agar stabil."
+        ),
+    )
     parser.add_argument("--loop", action="store_true", default=True, help="Loop video file")
     parser.add_argument("--no-loop", dest="loop", action="store_false", help="Jangan loop video")
     args = parser.parse_args()
+
+    if args.max_packet < 256 or args.max_packet > MAX_UDP_PACKET_LIMIT:
+        print(
+            f"[client] --max-packet harus di rentang 256..{MAX_UDP_PACKET_LIMIT}."
+            f" Diterima: {args.max_packet}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     stream_to_server(
         source=args.source,
@@ -185,6 +208,7 @@ def main():
         width=args.width,
         height=args.height,
         loop=args.loop,
+        max_packet=args.max_packet,
     )
 
 
