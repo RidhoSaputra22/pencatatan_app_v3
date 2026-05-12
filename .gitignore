@@ -165,3 +165,5 @@ revisi.txt
 !frontend/app/(protected)/recordings/page.js
 !frontend/components/recordings/
 !frontend/components/recordings/RecordingLibrary.js
+
+rstp/*.txt

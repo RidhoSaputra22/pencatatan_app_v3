@@ -80,6 +80,10 @@ from .config import (
     TRACK_REENTRY_COOLDOWN_SECONDS,
     TRACK_ROI_POINT,
     TRACK_SAME_TRACK_OUT_COOLDOWN_SECONDS,
+    TRACK_STITCH_ENABLED,
+    TRACK_STITCH_MAX_DISTANCE,
+    TRACK_STITCH_MIN_IOU,
+    TRACK_STITCH_RECENT_SECONDS,
     TRACKER_METHOD,
 )
 from .detection import load_model, parse_roi, point_in_roi, suppress_duplicate_person_detections
@@ -485,6 +489,10 @@ def _apply_runtime_config(payload: Dict[str, Any], model: Any) -> Dict[str, Any]
         "TRACK_EVENT_COOLDOWN_SECONDS": ("TRACK_EVENT_COOLDOWN_SECONDS", float),
         "TRACK_SAME_TRACK_OUT_COOLDOWN_SECONDS": ("TRACK_SAME_TRACK_OUT_COOLDOWN_SECONDS", float),
         "TRACK_REENTRY_COOLDOWN_SECONDS": ("TRACK_REENTRY_COOLDOWN_SECONDS", float),
+        "TRACK_STITCH_ENABLED": ("TRACK_STITCH_ENABLED", bool),
+        "TRACK_STITCH_RECENT_SECONDS": ("TRACK_STITCH_RECENT_SECONDS", float),
+        "TRACK_STITCH_MAX_DISTANCE": ("TRACK_STITCH_MAX_DISTANCE", float),
+        "TRACK_STITCH_MIN_IOU": ("TRACK_STITCH_MIN_IOU", float),
         "IDENTITY_MODE": ("IDENTITY_MODE", str),
     }
     for env_key, (global_name, value_type) in live_loop_fields.items():
@@ -685,6 +693,171 @@ def _same_spatial_region(
         1.0,
     )
     return center_distance <= max(42.0, min(150.0, scale * 0.35))
+
+
+_STITCH_STATE_KEYS = (
+    "visitor_key",
+    "person_type",
+    "employee_id",
+    "employee_code",
+    "employee_name",
+    "match_score",
+    "recognition_source",
+    "identity_status",
+    "identity_samples",
+    "pending_entry",
+    "entry_logged",
+    "entry_suppressed",
+    "exit_logged",
+    "inside_frames",
+    "outside_frames",
+    "exit_zone_frames",
+    "exit_motion_frames",
+    "cleared_exit_zone",
+    "exit_sequence_active",
+    "exit_sequence_frames",
+    "exit_peak_height",
+    "exit_bottom_edge_frames",
+    "exit_head_only_frames",
+    "exit_head_only_seen",
+    "last_track_out_ts",
+    "suppress_entry_until",
+    "seen_frames",
+    "track_hits",
+    "observed_frames",
+    "last_bbox",
+    "last_centroid",
+    "last_in_roi",
+    "last_seen_ts",
+    "direction",
+)
+
+
+def _prune_recent_lost_tracks(
+    recent_lost_tracks: Dict[int, Dict[str, Any]],
+    now_ts: float,
+) -> None:
+    if not TRACK_STITCH_ENABLED or TRACK_STITCH_RECENT_SECONDS <= 0:
+        recent_lost_tracks.clear()
+        return
+
+    expired = [
+        track_id
+        for track_id, snapshot in recent_lost_tracks.items()
+        if now_ts - float(snapshot.get("stored_ts", 0.0) or 0.0) > TRACK_STITCH_RECENT_SECONDS
+    ]
+    for track_id in expired:
+        del recent_lost_tracks[track_id]
+
+
+def _remember_recent_lost_track(
+    recent_lost_tracks: Dict[int, Dict[str, Any]],
+    track_id: int,
+    state: Dict[str, Any],
+    now_ts: float,
+) -> None:
+    if not TRACK_STITCH_ENABLED or TRACK_STITCH_RECENT_SECONDS <= 0:
+        return
+
+    visitor_key = str(state.get("visitor_key") or "").strip()
+    last_bbox = state.get("last_bbox")
+    if not visitor_key or not last_bbox or state.get("exit_logged"):
+        return
+    if state.get("person_type") == "EMPLOYEE":
+        return
+
+    # Keep only states that plausibly represent the same person still in view.
+    if not (
+        state.get("entry_logged")
+        or state.get("pending_entry")
+        or int(state.get("observed_frames", 0) or 0) >= TRACK_CONFIRM_FRAMES
+    ):
+        return
+
+    recent_lost_tracks[track_id] = {
+        "track_id": track_id,
+        "visitor_key": visitor_key,
+        "last_bbox": tuple(float(v) for v in last_bbox),
+        "last_seen_ts": float(state.get("last_seen_ts", now_ts) or now_ts),
+        "stored_ts": now_ts,
+        "state": {key: state.get(key) for key in _STITCH_STATE_KEYS if key in state},
+    }
+
+
+def _track_stitch_score(
+    current_bbox: Tuple[float, float, float, float],
+    previous_bbox: Tuple[float, float, float, float],
+    age_seconds: float,
+) -> Optional[float]:
+    iou = _bbox_iou_local(current_bbox, previous_bbox)
+    current_center = _bbox_center(current_bbox)
+    previous_center = _bbox_center(previous_bbox)
+    center_distance = float(
+        np.linalg.norm(
+            np.array(
+                [
+                    current_center[0] - previous_center[0],
+                    current_center[1] - previous_center[1],
+                ],
+                dtype=np.float32,
+            )
+        )
+    )
+    scale = max(
+        abs(float(current_bbox[2]) - float(current_bbox[0])),
+        abs(float(current_bbox[3]) - float(current_bbox[1])),
+        abs(float(previous_bbox[2]) - float(previous_bbox[0])),
+        abs(float(previous_bbox[3]) - float(previous_bbox[1])),
+        1.0,
+    )
+    motion_allowance = min(TRACK_STITCH_MAX_DISTANCE, max(42.0, scale * 0.45) + age_seconds * 18.0)
+    if iou < TRACK_STITCH_MIN_IOU and center_distance > motion_allowance:
+        return None
+    return (center_distance / max(motion_allowance, 1.0)) - iou
+
+
+def _find_recent_lost_track_match(
+    recent_lost_tracks: Dict[int, Dict[str, Any]],
+    current_bbox: Tuple[float, float, float, float],
+    classification: Dict[str, Any],
+    now_ts: float,
+) -> Optional[Dict[str, Any]]:
+    if not TRACK_STITCH_ENABLED or IDENTITY_MODE != "track":
+        return None
+    if classification.get("person_type") == "EMPLOYEE":
+        return None
+
+    best_snapshot = None
+    best_score = float("inf")
+    for snapshot in recent_lost_tracks.values():
+        age_seconds = now_ts - float(snapshot.get("last_seen_ts", now_ts) or now_ts)
+        if age_seconds < 0 or age_seconds > TRACK_STITCH_RECENT_SECONDS:
+            continue
+
+        previous_bbox = snapshot.get("last_bbox")
+        if not previous_bbox:
+            continue
+
+        score = _track_stitch_score(current_bbox, tuple(previous_bbox), age_seconds)
+        if score is not None and score < best_score:
+            best_score = score
+            best_snapshot = snapshot
+
+    return best_snapshot
+
+
+def _restore_stitched_state(state: Dict[str, Any], snapshot: Dict[str, Any]) -> None:
+    saved_state = snapshot.get("state") or {}
+    for key in _STITCH_STATE_KEYS:
+        if key in saved_state:
+            state[key] = saved_state[key]
+
+    state["stitched_from_track_id"] = snapshot.get("track_id")
+    state["visitor_key"] = snapshot.get("visitor_key", state.get("visitor_key", ""))
+    state["missing_frames"] = 0
+    if state.get("entry_logged"):
+        state["pending_entry"] = False
+        state["direction"] = "IN_ROI"
 
 
 def _bbox_near_frame_edge(
@@ -1220,6 +1393,8 @@ def real_loop():
     area_direction_mode = "BOTH"
     visitor_states: Dict[int, Dict[str, Any]] = {}
     visitor_flow_states: Dict[str, Dict[str, Any]] = {}
+    recent_lost_tracks: Dict[int, Dict[str, Any]] = {}
+    track_identity_aliases: Dict[int, str] = {}
     current_date = ""
     last_event_time: Dict[str, float] = {}
     cap = None
@@ -1247,6 +1422,8 @@ def real_loop():
             if today != current_date:
                 visitor_states = {}
                 visitor_flow_states = {}
+                recent_lost_tracks = {}
+                track_identity_aliases = {}
                 last_event_time = {}
                 current_date = today
                 reset_daily_cache(today)
@@ -1263,6 +1440,8 @@ def real_loop():
                 if runtime_apply.get("tracker_rebuild"):
                     tracker, tracker_mode = _build_tracker()
                     visitor_states = {}
+                    recent_lost_tracks = {}
+                    track_identity_aliases = {}
                     log.info("Tracker rebuilt after runtime config update (%s)", tracker_mode)
                 if runtime_apply.get("recording_rebuild"):
                     backup_recorder.close()
@@ -1313,6 +1492,8 @@ def real_loop():
                 last_frame_id = 0
                 events_enabled = base_events_enabled
                 local_file_events_consumed = False
+                recent_lost_tracks = {}
+                track_identity_aliases = {}
                 backup_recorder.reset(reason="stream source changed")
 
             if cap is None or not cap.isOpened():
@@ -1353,6 +1534,8 @@ def real_loop():
                         if EDGE_LOCAL_FILE_REPLAY_POST_EVENTS:
                             visitor_states = {}
                             visitor_flow_states = {}
+                            recent_lost_tracks = {}
+                            track_identity_aliases = {}
                             last_event_time = {}
                             face_recognizer.reset_daily()
                             tracker, tracker_mode = _build_tracker()
@@ -1484,6 +1667,7 @@ def real_loop():
                 ):
                     flow["inside"] = False
                     flow["expired_without_exit"] = True
+            _prune_recent_lost_tracks(recent_lost_tracks, now_ts)
 
             def has_nearby_inside_track(track_id: int, state: Dict[str, Any]) -> bool:
                 if IDENTITY_MODE != "track":
@@ -1730,6 +1914,33 @@ def real_loop():
                     identity = update_track_identity(track_id, identity_embedding, CAMERA_ID, today)
                     classification = face_recognizer.classify_track(frame, track_id, track.bbox)
                     visitor_key = _stable_identity_key(identity["visitor_key"], classification)
+                    if IDENTITY_MODE == "track" and track_id in track_identity_aliases:
+                        visitor_key = track_identity_aliases[track_id]
+
+                    is_fresh_track_state = int(state.get("seen_frames", 0) or 0) == 0
+                    if (
+                        is_fresh_track_state
+                        and IDENTITY_MODE == "track"
+                        and not state.get("visitor_key")
+                    ):
+                        stitch_match = _find_recent_lost_track_match(
+                            recent_lost_tracks,
+                            tuple(track.bbox),
+                            classification,
+                            now_ts,
+                        )
+                        if stitch_match and stitch_match.get("visitor_key"):
+                            _restore_stitched_state(state, stitch_match)
+                            visitor_key = str(stitch_match["visitor_key"])
+                            track_identity_aliases[track_id] = visitor_key
+                            recent_lost_tracks.pop(int(stitch_match["track_id"]), None)
+                            log.debug(
+                                "Stitched new track=%s to lost track=%s visitor=%s",
+                                track_id,
+                                stitch_match.get("track_id"),
+                                visitor_key[:8],
+                            )
+
                     previous_bbox = state.get("last_bbox")
                     previous_centroid = state.get("last_centroid")
                     previous_bottom = float(previous_bbox[3]) if previous_bbox else None
@@ -1979,6 +2190,8 @@ def real_loop():
                         _classification_from_state(state),
                         reason="exit_gate_head_disappear",
                     )
+                _remember_recent_lost_track(recent_lost_tracks, lost_track_id, state, now_ts)
+                track_identity_aliases.pop(lost_track_id, None)
                 del visitor_states[lost_track_id]
 
             draw_roi_polygon(display_frame, roi)

@@ -79,6 +79,10 @@ from .config import (
     BYTETRACK_MIN_BOX_AREA,
     BYTETRACK_NEW_TRACK_THRESH,
     TRACKER_METHOD,
+    TRACK_STITCH_ENABLED,
+    TRACK_STITCH_MAX_DISTANCE,
+    TRACK_STITCH_MIN_IOU,
+    TRACK_STITCH_RECENT_SECONDS,
     YOLO_BACKEND,
 )
 from .logger import get_logger
@@ -550,6 +554,10 @@ def health():
             "bytetrack_match_thresh": BYTETRACK_MATCH_THRESH,
             "bytetrack_new_track_thresh": BYTETRACK_NEW_TRACK_THRESH,
             "bytetrack_min_box_area": BYTETRACK_MIN_BOX_AREA,
+            "track_stitch_enabled": TRACK_STITCH_ENABLED,
+            "track_stitch_recent_seconds": TRACK_STITCH_RECENT_SECONDS,
+            "track_stitch_max_distance": TRACK_STITCH_MAX_DISTANCE,
+            "track_stitch_min_iou": TRACK_STITCH_MIN_IOU,
             "face_registry_source": FACE_REGISTRY_SOURCE,
             "employee_faces_dir": EDGE_EMPLOYEE_FACES_DIR,
             "employee_match_threshold": EMPLOYEE_MATCH_THRESHOLD,

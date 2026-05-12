@@ -15,6 +15,7 @@ from .config import (
 from .logger import get_logger
 
 log = get_logger("capture")
+_NETWORK_TIMEOUT_WARNING_EMITTED = False
 
 
 def is_video_file(source: str) -> bool:
@@ -53,8 +54,30 @@ def open_video_capture(source: str):
         # indefinitely. Without these, calling capture.release() while the reader
         # thread is blocked in capture.read() causes a SIGSEGV in FFmpeg internals.
         capture = cv2.VideoCapture(source)
-        capture.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, EDGE_CAPTURE_OPEN_TIMEOUT_MS)
-        capture.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, EDGE_CAPTURE_READ_TIMEOUT_MS)
+        open_timeout_supported = capture.set(
+            cv2.CAP_PROP_OPEN_TIMEOUT_MSEC,
+            EDGE_CAPTURE_OPEN_TIMEOUT_MS,
+        )
+        read_timeout_supported = capture.set(
+            cv2.CAP_PROP_READ_TIMEOUT_MSEC,
+            EDGE_CAPTURE_READ_TIMEOUT_MS,
+        )
+        if not (open_timeout_supported and read_timeout_supported):
+            global _NETWORK_TIMEOUT_WARNING_EMITTED
+            if not _NETWORK_TIMEOUT_WARNING_EMITTED:
+                backend_name = "unknown"
+                try:
+                    if capture.isOpened():
+                        backend_name = capture.getBackendName()
+                except Exception:
+                    pass
+                log.warning(
+                    "Backend %s ignored CAP_PROP_OPEN_TIMEOUT_MSEC / "
+                    "CAP_PROP_READ_TIMEOUT_MSEC after open; relying on "
+                    "OPENCV_FFMPEG_CAPTURE_OPTIONS for RTSP network timeouts",
+                    backend_name,
+                )
+                _NETWORK_TIMEOUT_WARNING_EMITTED = True
 
     capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     return capture
