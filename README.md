@@ -5,7 +5,7 @@ Sistem monitoring jumlah pengunjung perpustakaan berbasis CCTV dengan YOLOv5 + t
 ## Fitur Utama
 
 - Deteksi manusia menggunakan **YOLOv5**
-- **Tracking** (DeepSORT / Centroid Tracker)
+- **Tracking** (ByteTrack / DeepSORT / Centroid Tracker)
 - **Penyaringan pegawai** dengan face recognition berbasis InsightFace/ArcFace
 - **Pengunjung Unik Harian** (masuk 2-3 kali dalam sehari tetap dihitung 1 kali)
 - **Backup footage hasil YOLO** otomatis per segmen 10 menit
@@ -42,7 +42,7 @@ Sistem monitoring jumlah pengunjung perpustakaan berbasis CCTV dengan YOLOv5 + t
 ## Teknologi
 
 - **Backend**: FastAPI + SQLite (SQLModel)
-- **Edge/AI**: YOLOv5 + OpenCV + DeepSORT/CentroidTracker + FastAPI/Uvicorn + aiortc
+- **Edge/AI**: YOLOv5/Ultralytics + OpenCV + ByteTrack/DeepSORT/CentroidTracker + FastAPI/Uvicorn + aiortc
 - **Employee filter**: InsightFace face detection + ArcFace embedding + registry pegawai
 - **Frontend**: Next.js 14
 
@@ -63,7 +63,7 @@ Sistem monitoring jumlah pengunjung perpustakaan berbasis CCTV dengan YOLOv5 + t
 │   │   ├── loops.py       # Main detection loop
 │   │   ├── streaming.py   # WebRTC server + MJPEG fallback (port 5000)
 │   │   ├── detection.py   # YOLOv5 wrapper
-│   │   ├── tracker.py     # DeepSORT / CentroidTracker
+│   │   ├── tracker.py     # ByteTrack / DeepSORT / CentroidTracker
 │   │   ├── reid.py        # Re-identification
 │   │   ├── visualization.py # Draw overlay
 │   │   ├── api_client.py  # Kirim event ke backend
@@ -162,7 +162,7 @@ FRONTEND_PORT=3000
 ### Tuning Runtime
 
 Ubah nilai seperti `EDGE_STREAM_URL`, `EDGE_PROCESSING_MAX_FPS`,
-`EDGE_STREAM_MAX_FPS`, `YOLO_CONF`, `YOLOV5_WEIGHTS`, tracking, ReID, dan face
+`EDGE_STREAM_MAX_FPS`, `YOLO_CONF`, `YOLOV5_WEIGHTS`, `TRACKER_METHOD`, tracking, ReID, dan face
 filtering dari dashboard. Backend menyimpan perubahan ke
 `backend/storage/runtime_config.json`; edge worker mengambilnya lewat endpoint
 `/api/admin/runtime-config`.
@@ -222,7 +222,7 @@ Sesuai dengan konsep proyek:
 ```text
 Camera
   -> YOLOv5 (deteksi orang)
-  -> DeepSORT (tracking ID)
+  -> ByteTrack / DeepSORT / Centroid (tracking ID)
   -> InsightFace (face detection + ArcFace embedding)
   -> Cek database pegawai
   -> EMPLOYEE: event dilog tetapi tidak masuk statistik pelanggan

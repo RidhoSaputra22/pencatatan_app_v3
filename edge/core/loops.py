@@ -56,6 +56,11 @@ from .config import (
     TEST_OUTPUT_FPS,
     TEST_OUTPUT_NAME,
     TEST_ROI_JSON,
+    BYTETRACK_HIGH_THRESH,
+    BYTETRACK_LOW_THRESH,
+    BYTETRACK_MATCH_THRESH,
+    BYTETRACK_MIN_BOX_AREA,
+    BYTETRACK_NEW_TRACK_THRESH,
     TRACK_CONFIRM_FRAMES,
     TRACK_ENTRY_CONFIRM_FRAMES,
     TRACK_EVENT_COOLDOWN_SECONDS,
@@ -75,6 +80,7 @@ from .config import (
     TRACK_REENTRY_COOLDOWN_SECONDS,
     TRACK_ROI_POINT,
     TRACK_SAME_TRACK_OUT_COOLDOWN_SECONDS,
+    TRACKER_METHOD,
 )
 from .detection import load_model, parse_roi, point_in_roi, suppress_duplicate_person_detections
 from .face_recognition import EmployeeFaceRecognizer
@@ -82,7 +88,7 @@ from .logger import get_logger
 from .reid import cleanup_old_tracks, reset_daily_cache, update_track_identity
 from .recording import SegmentedVideoRecorder
 from .streaming import has_raw_stream_clients, update_latest_frame
-from .tracker import CentroidTracker, DEEPSORT_AVAILABLE, DeepSORTTracker
+from .tracker import ByteTrackTracker, CentroidTracker, DEEPSORT_AVAILABLE, DeepSORTTracker
 from .visualization import draw_bounding_boxes, draw_exit_gate, draw_info_overlay, draw_roi_polygon
 
 log = get_logger("loops")
@@ -90,11 +96,17 @@ log = get_logger("loops")
 EVENT_COOLDOWN = TRACK_EVENT_COOLDOWN_SECONDS
 REFERENCE_FRAME_SIZE = (TEST_FRAME_WIDTH, TEST_FRAME_HEIGHT)
 _TRACKER_REBUILD_KEYS = {
+    "TRACKER_METHOD",
     "FORCE_CENTROID",
     "TRACK_MAX_AGE",
     "TRACK_N_INIT",
     "TRACK_MAX_DISTANCE",
     "TRACK_MAX_COSINE_DISTANCE",
+    "BYTETRACK_HIGH_THRESH",
+    "BYTETRACK_LOW_THRESH",
+    "BYTETRACK_MATCH_THRESH",
+    "BYTETRACK_NEW_TRACK_THRESH",
+    "BYTETRACK_MIN_BOX_AREA",
 }
 _RECORDING_REBUILD_KEYS = {
     "EDGE_RECORDING_ENABLED",
@@ -189,6 +201,14 @@ def _apply_yolo_thresholds(model: Any, conf: Optional[float], iou: Optional[floa
             model._iou = iou
         if hasattr(model, "iou"):
             model.iou = iou
+
+
+def _effective_detector_conf() -> float:
+    """Lower detector threshold only when ByteTrack needs low-confidence boxes."""
+    tracker_method = str(globals().get("TRACKER_METHOD", "auto") or "auto").strip().lower()
+    if tracker_method == "bytetrack":
+        return min(float(detection_module.CONF_TH), float(BYTETRACK_LOW_THRESH))
+    return float(detection_module.CONF_TH)
 
 
 def _apply_runtime_config(payload: Dict[str, Any], model: Any) -> Dict[str, Any]:
@@ -359,8 +379,7 @@ def _apply_runtime_config(payload: Dict[str, Any], model: Any) -> Dict[str, Any]
         if previous != yolo_iou:
             changed.append("YOLO_IOU")
 
-    if yolo_conf is not None or yolo_iou is not None:
-        _apply_yolo_thresholds(model, yolo_conf, yolo_iou)
+    detector_threshold_refresh = yolo_conf is not None or yolo_iou is not None
 
     if "YOLO_IMG_SIZE" in values:
         img_size = _runtime_int(values["YOLO_IMG_SIZE"], IMG_SIZE, minimum=32)
@@ -406,6 +425,15 @@ def _apply_runtime_config(payload: Dict[str, Any], model: Any) -> Dict[str, Any]
         if previous != duplicate_iou:
             changed.append("DUPLICATE_IOU_THRESHOLD")
 
+    if "TRACKER_METHOD" in values:
+        tracker_method = str(values["TRACKER_METHOD"] or "auto").strip().lower() or "auto"
+        if tracker_method not in {"auto", "deepsort", "bytetrack", "centroid"}:
+            tracker_method = "auto"
+        mark(
+            "TRACKER_METHOD",
+            _set_across_modules("TRACKER_METHOD", tracker_method, (config_module, streaming_module)),
+        )
+
     tracker_fields = {
         "FORCE_CENTROID": ("FORCE_CENTROID", _runtime_bool, False, (config_module, streaming_module)),
         "TRACK_MAX_AGE": ("TRACK_MAX_DISAPPEARED", _runtime_int, 0, (config_module, streaming_module)),
@@ -417,6 +445,16 @@ def _apply_runtime_config(payload: Dict[str, Any], model: Any) -> Dict[str, Any]
             0.0,
             (config_module, streaming_module),
         ),
+        "BYTETRACK_HIGH_THRESH": ("BYTETRACK_HIGH_THRESH", _runtime_float, 0.0, (config_module, streaming_module)),
+        "BYTETRACK_LOW_THRESH": ("BYTETRACK_LOW_THRESH", _runtime_float, 0.0, (config_module, streaming_module)),
+        "BYTETRACK_MATCH_THRESH": ("BYTETRACK_MATCH_THRESH", _runtime_float, 0.0, (config_module, streaming_module)),
+        "BYTETRACK_NEW_TRACK_THRESH": (
+            "BYTETRACK_NEW_TRACK_THRESH",
+            _runtime_float,
+            0.0,
+            (config_module, streaming_module),
+        ),
+        "BYTETRACK_MIN_BOX_AREA": ("BYTETRACK_MIN_BOX_AREA", _runtime_float, 0.0, (config_module, streaming_module)),
     }
     for env_key, (global_name, caster, minimum, modules) in tracker_fields.items():
         if env_key not in values:
@@ -427,6 +465,12 @@ def _apply_runtime_config(payload: Dict[str, Any], model: Any) -> Dict[str, Any]
         else:
             parsed = caster(values[env_key], default, minimum=minimum)
         mark(env_key, _set_across_modules(global_name, parsed, modules))
+
+    if any(key in changed for key in ("TRACKER_METHOD", "BYTETRACK_LOW_THRESH")):
+        detector_threshold_refresh = True
+
+    if detector_threshold_refresh:
+        _apply_yolo_thresholds(model, _effective_detector_conf(), yolo_iou)
 
     live_loop_fields = {
         "TRACK_ROI_POINT": ("TRACK_ROI_POINT", str),
@@ -598,6 +642,51 @@ def _track_counting_point(track) -> Tuple[float, float]:
     return float(track.centroid[0]), float(track.centroid[1])
 
 
+def _bbox_center(bbox: Tuple[float, float, float, float]) -> Tuple[float, float]:
+    x1, y1, x2, y2 = bbox
+    return (float(x1) + float(x2)) / 2.0, (float(y1) + float(y2)) / 2.0
+
+
+def _bbox_area_local(bbox: Tuple[float, float, float, float]) -> float:
+    return max(0.0, float(bbox[2]) - float(bbox[0])) * max(0.0, float(bbox[3]) - float(bbox[1]))
+
+
+def _bbox_iou_local(
+    box_a: Tuple[float, float, float, float],
+    box_b: Tuple[float, float, float, float],
+) -> float:
+    inter_x1 = max(float(box_a[0]), float(box_b[0]))
+    inter_y1 = max(float(box_a[1]), float(box_b[1]))
+    inter_x2 = min(float(box_a[2]), float(box_b[2]))
+    inter_y2 = min(float(box_a[3]), float(box_b[3]))
+    inter_w = max(0.0, inter_x2 - inter_x1)
+    inter_h = max(0.0, inter_y2 - inter_y1)
+    inter_area = inter_w * inter_h
+    union = _bbox_area_local(box_a) + _bbox_area_local(box_b) - inter_area
+    return inter_area / union if union > 0 else 0.0
+
+
+def _same_spatial_region(
+    bbox_a: Tuple[float, float, float, float],
+    bbox_b: Tuple[float, float, float, float],
+) -> bool:
+    iou = _bbox_iou_local(bbox_a, bbox_b)
+    if iou >= 0.16:
+        return True
+
+    ax, ay = _bbox_center(bbox_a)
+    bx, by = _bbox_center(bbox_b)
+    center_distance = float(np.linalg.norm(np.array([ax - bx, ay - by], dtype=np.float32)))
+    scale = max(
+        abs(float(bbox_a[2]) - float(bbox_a[0])),
+        abs(float(bbox_a[3]) - float(bbox_a[1])),
+        abs(float(bbox_b[2]) - float(bbox_b[0])),
+        abs(float(bbox_b[3]) - float(bbox_b[1])),
+        1.0,
+    )
+    return center_distance <= max(42.0, min(150.0, scale * 0.35))
+
+
 def _bbox_near_frame_edge(
     bbox: Tuple[float, float, float, float],
     frame_width: int,
@@ -764,7 +853,27 @@ def _state_ready_for_exit_commit(
 
 
 def _identity_ready(identity: Dict[str, Any]) -> bool:
-    return identity.get("identity_status") in {"CONFIRMED", "FALLBACK"}
+    status = str(identity.get("identity_status") or "").upper()
+    if IDENTITY_MODE == "reid":
+        if status != "CONFIRMED":
+            return False
+
+        # ReID can oscillate briefly when a new track is still stabilizing.
+        # Delay counting "new_visitor" until it has a few extra embedding samples
+        # so relay jitter/occlusion is less likely to inflate unique counts.
+        source = str(identity.get("reid_source") or "").strip().lower()
+        samples = int(identity.get("embedding_samples") or 0)
+        min_track_samples = int(getattr(reid_module, "REID_MIN_TRACK_FRAMES", 3) or 3)
+        min_new_visitor_samples = max(min_track_samples + 2, 6)
+
+        if source == "new_visitor" and samples < min_new_visitor_samples:
+            return False
+        return True
+
+    if IDENTITY_MODE == "track":
+        return status in {"CONFIRMED", "FALLBACK"}
+
+    return status in {"CONFIRMED", "FALLBACK"}
 
 
 def _classification_from_state(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -1007,23 +1116,51 @@ def _build_output_writer(stream_url: str, frame: np.ndarray, source_fps: float):
 
 
 def _build_tracker():
-    tracker_mode = "DeepSORT+ReID" if DEEPSORT_AVAILABLE and not FORCE_CENTROID else "CentroidTracker"
-    if DEEPSORT_AVAILABLE and not FORCE_CENTROID:
+    tracker_method = str(TRACKER_METHOD or "auto").strip().lower()
+
+    if tracker_method == "bytetrack":
+        return (
+            ByteTrackTracker(
+                max_age=TRACK_MAX_DISAPPEARED,
+                n_init=TRACK_CONFIRM_FRAMES,
+                high_thresh=BYTETRACK_HIGH_THRESH,
+                low_thresh=BYTETRACK_LOW_THRESH,
+                match_thresh=BYTETRACK_MATCH_THRESH,
+                new_track_thresh=BYTETRACK_NEW_TRACK_THRESH,
+                min_box_area=BYTETRACK_MIN_BOX_AREA,
+            ),
+            "ByteTrack",
+        )
+
+    if tracker_method == "centroid" or (tracker_method == "auto" and FORCE_CENTROID):
+        return (
+            CentroidTracker(
+                max_disappeared=TRACK_MAX_DISAPPEARED,
+                max_distance=TRACK_MAX_DISTANCE,
+            ),
+            "CentroidTracker",
+        )
+
+    if tracker_method in {"auto", "deepsort"} and DEEPSORT_AVAILABLE:
         tracker = DeepSORTTracker(
             max_age=TRACK_MAX_DISAPPEARED,
             n_init=TRACK_CONFIRM_FRAMES,
             max_cosine_distance=TRACK_MAX_COSINE_DISTANCE,
         )
+        tracker_mode = "DeepSORT+ReID"
         if getattr(tracker, "using_fallback", False):
             tracker_mode = "CentroidTracker"
         return tracker, tracker_mode
+
+    if tracker_method == "deepsort" and not DEEPSORT_AVAILABLE:
+        log.warning("TRACKER_METHOD=deepsort requested but DeepSORT is unavailable; using CentroidTracker")
 
     return (
         CentroidTracker(
             max_disappeared=TRACK_MAX_DISAPPEARED,
             max_distance=TRACK_MAX_DISTANCE,
         ),
-        tracker_mode,
+        "CentroidTracker",
     )
 
 
@@ -1043,6 +1180,7 @@ def real_loop():
     model = load_model()
     face_recognizer = EmployeeFaceRecognizer()
     _apply_runtime_config(startup_runtime_config, model)
+    _apply_yolo_thresholds(model, _effective_detector_conf(), detection_module.IOU_TH)
 
     # log.info("Running in REAL mode (%s + employee filtering)", tracker_mode)
     log.info(
@@ -1065,11 +1203,13 @@ def real_loop():
         )
 
     tracker, tracker_mode = _build_tracker()
-    if IDENTITY_MODE == "reid" and tracker_mode == "CentroidTracker":
+    if IDENTITY_MODE == "reid" and tracker_mode != "DeepSORT+ReID":
         log.warning(
-            "IDENTITY_MODE=reid berjalan di CentroidTracker. "
+            "IDENTITY_MODE=reid berjalan di %s. "
             "Embedding ReID tidak tersedia, visitor_key fallback ke track-id, "
             "dan hitungan unik bisa membengkak saat stream relay tidak stabil."
+            " Gunakan IDENTITY_MODE=track untuk ByteTrack/Centroid atau pilih DeepSORT+ReID.",
+            tracker_mode,
         )
 
     last_cfg_fetch = 0.0
@@ -1084,6 +1224,8 @@ def real_loop():
     last_event_time: Dict[str, float] = {}
     cap = None
     cap_source = ""
+    cap_started_ts = 0.0
+    last_good_frame_ts = 0.0
     last_frame_id = 0
     processed_frames = 0
     frame_w = TEST_FRAME_WIDTH
@@ -1166,6 +1308,8 @@ def real_loop():
                 cap.release()
                 cap = None
                 cap_source = ""
+                cap_started_ts = 0.0
+                last_good_frame_ts = 0.0
                 last_frame_id = 0
                 events_enabled = base_events_enabled
                 local_file_events_consumed = False
@@ -1180,6 +1324,8 @@ def real_loop():
                     time.sleep(3)
                     continue
                 cap_source = stream_url
+                cap_started_ts = now_ts
+                last_good_frame_ts = 0.0
                 last_frame_id = 0
 
             ok, frame, last_frame_id = cap.read(last_frame_id=last_frame_id, timeout=1.0)
@@ -1224,17 +1370,35 @@ def real_loop():
                     cap.release()
                     cap = None
                     cap_source = ""
+                    cap_started_ts = 0.0
+                    last_good_frame_ts = 0.0
                     last_frame_id = 0
                     time.sleep(1)
                     continue
+
+                stream_stall_grace = max(3.0, float(EDGE_RECORDING_MAX_GAP_SECONDS) + 2.0)
+                last_stream_activity_ts = last_good_frame_ts or cap_started_ts or now_ts
+                stream_stall_age = now_ts - last_stream_activity_ts
+                if (
+                    cap is not None
+                    and not _is_local_file_source(stream_url)
+                    and stream_stall_age < stream_stall_grace
+                ):
+                    time.sleep(0.05)
+                    continue
+
                 log.warning("Frame read failed. Reconnecting...")
                 if cap is not None:
                     cap.release()
                 cap = None
                 cap_source = ""
+                cap_started_ts = 0.0
+                last_good_frame_ts = 0.0
                 last_frame_id = 0
                 time.sleep(1)
                 continue
+
+            last_good_frame_ts = now_ts
 
             if is_video_test and TEST_FRAME_STEP > 1 and (last_frame_id % TEST_FRAME_STEP) != 0:
                 continue
@@ -1281,6 +1445,9 @@ def real_loop():
                 tracker_mode_runtime = (
                     "CentroidTracker" if getattr(tracker, "using_fallback", False) else "DeepSORT+ReID"
                 )
+            elif isinstance(tracker, ByteTrackTracker):
+                tracks = tracker.update(detections)
+                tracker_mode_runtime = "ByteTrack"
             else:
                 boxes = [(det[0], det[1], det[2], det[3]) for det in detections]
                 tracks = tracker.update(boxes)
@@ -1318,6 +1485,27 @@ def real_loop():
                     flow["inside"] = False
                     flow["expired_without_exit"] = True
 
+            def has_nearby_inside_track(track_id: int, state: Dict[str, Any]) -> bool:
+                if IDENTITY_MODE != "track":
+                    return False
+                current_bbox = state.get("last_bbox")
+                if not current_bbox:
+                    return False
+
+                for other_track_id, other_state in visitor_states.items():
+                    if other_track_id == track_id:
+                        continue
+                    if not other_state.get("entry_logged") or other_state.get("exit_logged"):
+                        continue
+                    if not other_state.get("visitor_key"):
+                        continue
+                    if now_ts - float(other_state.get("last_seen_ts", now_ts) or now_ts) > TRACK_REENTRY_COOLDOWN_SECONDS:
+                        continue
+                    other_bbox = other_state.get("last_bbox")
+                    if other_bbox and _same_spatial_region(tuple(current_bbox), tuple(other_bbox)):
+                        return True
+                return False
+
             def commit_count_event(
                 direction: str,
                 track_id: int,
@@ -1337,6 +1525,17 @@ def real_loop():
                 )
 
                 if direction == "OUT":
+                    if state.get("entry_suppressed"):
+                        _reset_exit_sequence_state(state)
+                        state["pending_entry"] = False
+                        state["entry_logged"] = False
+                        state["exit_logged"] = True
+                        state["direction"] = "OUT"
+                        flow["inside"] = False
+                        flow["last_out_ts"] = now_ts
+                        flow["suppress_in_until"] = now_ts + TRACK_REENTRY_COOLDOWN_SECONDS
+                        return True
+
                     if state.get("exit_logged"):
                         state["pending_entry"] = False
                         state["entry_logged"] = False
@@ -1404,6 +1603,25 @@ def real_loop():
                         flow["last_out_ts"] = now_ts
                     return True
 
+                if direction == "IN" and has_nearby_inside_track(track_id, state):
+                    _reset_exit_sequence_state(state)
+                    state["pending_entry"] = False
+                    state["entry_logged"] = True
+                    state["exit_logged"] = False
+                    state["entry_suppressed"] = True
+                    state["is_new"] = False
+                    state["direction"] = "IN_ROI"
+                    flow["inside"] = True
+                    flow["last_in_ts"] = now_ts
+                    flow["last_seen_ts"] = now_ts
+                    flow["active_track_id"] = track_id
+                    log.debug(
+                        "Suppress duplicate centroid IN track=%s visitor=%s near existing inside track",
+                        track_id,
+                        visitor_key[:8],
+                    )
+                    return True
+
                 debounce_key = f"{visitor_key}_{direction}"
                 if now_ts - last_event_time.get(debounce_key, 0.0) < EVENT_COOLDOWN:
                     if direction == "IN":
@@ -1449,6 +1667,7 @@ def real_loop():
                     _reset_exit_sequence_state(state)
                     state["entry_logged"] = True
                     state["exit_logged"] = False
+                    state["entry_suppressed"] = False
                     state["is_new"] = bool(is_new_unique)
                     state["direction"] = "IN"
                     flow["inside"] = True
@@ -1486,6 +1705,7 @@ def real_loop():
                         "identity_status": "PENDING",
                         "pending_entry": False,
                         "entry_logged": False,
+                        "entry_suppressed": False,
                         "inside_frames": 0,
                         "outside_frames": 0,
                         "exit_zone_frames": 0,

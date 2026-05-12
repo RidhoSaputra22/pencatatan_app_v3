@@ -258,11 +258,23 @@ DUPLICATE_IOU_THRESHOLD = min(
 )
 
 # Tracking configuration
+TRACKER_METHOD = env_alias(("TRACKER_METHOD", "TRACKING_METHOD", "TRACKER_BACKEND"), "auto").strip().lower() or "auto"
 FORCE_CENTROID = env_bool_alias(("FORCE_CENTROID",), False)
 TRACK_MAX_DISAPPEARED = max(0, env_int_alias(("TRACK_MAX_AGE", "TRACK_MAX_DISAPPEARED"), 30))
 TRACK_MAX_DISTANCE = max(0.0, env_float_alias(("TRACK_MAX_DISTANCE",), 80.0))
 TRACK_CONFIRM_FRAMES = max(1, env_int_alias(("TRACK_N_INIT", "TRACK_CONFIRM_FRAMES"), 3))
 TRACK_MAX_COSINE_DISTANCE = max(0.0, env_float_alias(("TRACK_MAX_COSINE_DISTANCE",), 0.3))
+BYTETRACK_HIGH_THRESH = min(1.0, max(0.0, env_float_alias(("BYTETRACK_HIGH_THRESH",), CONF_TH)))
+BYTETRACK_LOW_THRESH = min(
+    BYTETRACK_HIGH_THRESH,
+    max(0.0, env_float_alias(("BYTETRACK_LOW_THRESH",), 0.1)),
+)
+BYTETRACK_MATCH_THRESH = min(1.0, max(0.0, env_float_alias(("BYTETRACK_MATCH_THRESH",), 0.8)))
+BYTETRACK_NEW_TRACK_THRESH = min(
+    1.0,
+    max(0.0, env_float_alias(("BYTETRACK_NEW_TRACK_THRESH",), BYTETRACK_HIGH_THRESH)),
+)
+BYTETRACK_MIN_BOX_AREA = max(0.0, env_float_alias(("BYTETRACK_MIN_BOX_AREA",), 10.0))
 TRACK_ENTRY_CONFIRM_FRAMES = max(1, env_int_alias(("TRACK_ENTRY_CONFIRM_FRAMES",), 4))
 TRACK_EXIT_CONFIRM_FRAMES = max(1, env_int_alias(("TRACK_EXIT_CONFIRM_FRAMES",), 3))
 TRACK_EXIT_BOTTOM_CONFIRM_FRAMES = max(1, env_int_alias(("TRACK_EXIT_BOTTOM_CONFIRM_FRAMES",), 1))

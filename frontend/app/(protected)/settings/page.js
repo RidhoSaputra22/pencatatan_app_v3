@@ -273,7 +273,7 @@ export default function SettingsPage() {
             Konfigurasi Runtime
           </Heading>
           <p className="text-sm text-base-content/60">
-            YOLO, DeepSORT, ReID, stream, dan face filtering.
+            YOLO, tracking, ReID, stream, dan face filtering.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">

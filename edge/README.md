@@ -31,7 +31,7 @@ edge/
 │   ├── config.py          # Bootstrap environment configuration
 │   ├── api_client.py      # Backend API communication
 │   ├── streaming.py       # WebRTC video server + MJPEG fallback
-│   ├── tracker.py         # CentroidTracker class
+│   ├── tracker.py         # ByteTrack / DeepSORT / CentroidTracker
 │   ├── detection.py       # YOLOv5 & ROI utilities
 │   ├── visualization.py   # Drawing functions
 │   └── loops.py           # Processing loops (fake_loop, real_loop)
@@ -70,6 +70,7 @@ edge/
 
 ### 5. `core/tracker.py` - Object Tracking
 - `Track` dataclass - Representasi tracked object
+- `ByteTrackTracker` class - High/low confidence association untuk tracking CCTV ringan
 - `CentroidTracker` class - Simple centroid tracking
   - Association algorithm
   - Track lifecycle management
@@ -101,6 +102,13 @@ Jika DeepSORT gagal inisialisasi di host CPU tertentu, worker sekarang akan
 otomatis menonaktifkan MKLDNN untuk percobaan ulang dan fallback ke
 CentroidTracker bila DeepSORT tetap gagal. Worker tetap jalan, tetapi akurasi
 re-identification lebih rendah dibanding DeepSORT.
+
+Metode tracking dipilih dari dashboard lewat `TRACKER_METHOD`:
+
+- `bytetrack` untuk tracking ringan tanpa embedder ReID
+- `deepsort` untuk DeepSORT + body ReID embedding
+- `centroid` untuk fallback paling sederhana
+- `auto` untuk perilaku lama
 
 Tuning ReID body embedding sekarang dikelola dari dashboard:
 
