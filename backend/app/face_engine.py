@@ -56,11 +56,8 @@ def _normalize_embedding(embedding: np.ndarray) -> np.ndarray:
     return embedding / norm
 
 
-def extract_face_embedding(image_bytes: bytes) -> Dict[str, Any]:
-    """
-    Extract a single normalized face embedding from an uploaded employee photo.
-    Rejects images that contain zero or multiple faces to avoid ambiguous enrolment.
-    """
+def decode_employee_photo(image_bytes: bytes) -> np.ndarray:
+    """Decode uploaded employee photo and ensure it is a readable image."""
     if not image_bytes:
         raise ValueError("Foto pegawai kosong")
 
@@ -68,6 +65,15 @@ def extract_face_embedding(image_bytes: bytes) -> Dict[str, Any]:
     image = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
     if image is None:
         raise ValueError("File foto pegawai tidak valid")
+    return image
+
+
+def extract_face_embedding(image_bytes: bytes) -> Dict[str, Any]:
+    """
+    Extract a single normalized face embedding from an uploaded employee photo.
+    Rejects images that contain zero or multiple faces to avoid ambiguous enrolment.
+    """
+    image = decode_employee_photo(image_bytes)
 
     faces = get_face_app().get(image)
     if len(faces) == 0:

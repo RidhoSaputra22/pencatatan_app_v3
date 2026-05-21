@@ -88,7 +88,7 @@ export default function EmployeeForm({ onCreated, employee, onSaved, onCancel })
       return;
     }
     if (!isEdit && !photoFile) {
-      showToast("error", "Foto referensi wajah wajib diunggah.");
+      showToast("error", "Foto pegawai wajib diunggah.");
       return;
     }
 
@@ -150,7 +150,7 @@ export default function EmployeeForm({ onCreated, employee, onSaved, onCancel })
         <div className="grid gap-2">
           <label className="label">
             <span className="label-text font-medium">
-              Foto Wajah Referensi
+              Foto Pegawai
               {!isEdit && <span className="text-error ml-1">*</span>}
             </span>
           </label>
@@ -162,7 +162,7 @@ export default function EmployeeForm({ onCreated, employee, onSaved, onCancel })
             onChange={(e) => setPhotoFile(e.target.files?.[0] || null)}
           />
           <p className="text-sm text-base-content/70">
-            Gunakan foto frontal dengan satu wajah yang jelas. Saat edit, unggah foto baru jika ingin mengganti embedding.
+            Unggah foto pegawai seperti biasa. Sistem akan menyimpan file penuh, dan embedding wajah hanya dibuat bila tersedia.
           </p>
           {isEdit && employee?.has_face_embedding && !photoFile && (
             <p className="text-sm text-success">Embedding wajah pegawai sudah tersimpan.</p>

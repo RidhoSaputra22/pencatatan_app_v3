@@ -58,7 +58,7 @@
     "FACE_UNKNOWN_TIMEOUT": "2.5",
     "FACE_DETECTION_FRAME_INTERVAL": "3",
     "FACE_REGISTRY_SOURCE": "folder",
-    "EDGE_EMPLOYEE_FACES_DIR": "petugas",
+    "EDGE_EMPLOYEE_FACES_DIR": "./backend/storage/employee_faces",
     "FACE_ID_MATCH_THRESHOLD": "0.55",
     "FACE_ID_MIN_TRACK_FRAMES": "3",
     "FACE_ID_STRONG_MATCH_THRESHOLD": "0.65",

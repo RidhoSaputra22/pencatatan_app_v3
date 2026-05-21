@@ -31,7 +31,7 @@ from .auth import (
     hash_password, verify_password, create_access_token,
     get_user_by_username, get_role_by_name, require_role
 )
-from .face_engine import extract_face_embedding, face_engine_status, store_employee_photo
+from .face_engine import decode_employee_photo, extract_face_embedding, store_employee_photo
 from .stream_relay import (
     start_udp_receiver,
     stop_udp_receiver,
@@ -45,6 +45,7 @@ from .runtime_config import (
 )
 
 import os
+import logging
 import re
 import shutil
 import subprocess
@@ -55,6 +56,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 app = FastAPI(title="Visitor Monitoring API", version="1.0.0")
+logger = logging.getLogger(__name__)
 
 # Footage storage directory
 FOOTAGE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / "storage" / "footage"
@@ -223,6 +225,29 @@ def serialize_employee(employee: Employee) -> EmployeeOut:
 def dashboard_total_activity(unique_visitors: int, total_out: int) -> int:
     """Total aktivitas dashboard = masuk unik + keluar."""
     return int(unique_visitors or 0) + int(total_out or 0)
+
+
+def resolve_employee_face_embedding(photo_bytes: bytes, employee_code: str) -> Optional[List[float]]:
+    """
+    Try to build an employee face embedding without blocking photo uploads.
+    The full employee photo is still saved even when face detection fails.
+    """
+    try:
+        face_data = extract_face_embedding(photo_bytes)
+        return face_data["embedding"]
+    except ValueError as exc:
+        logger.info(
+            "Employee photo for '%s' saved without face embedding: %s",
+            employee_code,
+            exc,
+        )
+    except RuntimeError as exc:
+        logger.warning(
+            "Face engine unavailable while saving employee photo for '%s': %s",
+            employee_code,
+            exc,
+        )
+    return None
 
 
 # ==================== Startup Event ====================
@@ -507,10 +532,6 @@ async def create_employee(
     session: Session = Depends(get_session),
     _: User = Depends(require_role("ADMIN")),
 ):
-    available, reason = face_engine_status()
-    if not available:
-        raise HTTPException(status_code=503, detail=f"Face engine belum siap: {reason}")
-
     employee_code = employee_code.strip()
     full_name = full_name.strip()
     notes = notes.strip() if notes else None
@@ -530,17 +551,17 @@ async def create_employee(
 
     photo_bytes = await photo.read()
     try:
-        face_data = extract_face_embedding(photo_bytes)
+        decode_employee_photo(photo_bytes)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    face_embedding = resolve_employee_face_embedding(photo_bytes, employee_code)
 
     employee = Employee(
         employee_code=employee_code,
         full_name=full_name,
         notes=notes,
-        face_embedding=face_data["embedding"],
+        face_embedding=face_embedding,
         is_active=True,
     )
     session.add(employee)
@@ -607,19 +628,16 @@ async def update_employee(
         employee.is_active = is_active
 
     if photo is not None and photo.filename:
-        available, reason = face_engine_status()
-        if not available:
-            raise HTTPException(status_code=503, detail=f"Face engine belum siap: {reason}")
-
         photo_bytes = await photo.read()
         try:
-            face_data = extract_face_embedding(photo_bytes)
+            decode_employee_photo(photo_bytes)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-        employee.face_embedding = face_data["embedding"]
+        employee.face_embedding = resolve_employee_face_embedding(
+            photo_bytes,
+            employee.employee_code,
+        )
         employee.face_image_path = store_employee_photo(
             employee.employee_id,
             employee.employee_code,
