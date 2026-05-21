@@ -291,6 +291,40 @@ start_backend() {
     -- -lc "exec $quoted_uvicorn app.main:app --host $quoted_host --port $quoted_port" >/dev/null
 }
 
+wait_for_backend_ready() {
+  local python_bin="$1"
+  local port="$2"
+  local timeout_seconds="${3:-30}"
+
+  log "Menunggu backend siap di http://localhost:$port/health"
+  "$python_bin" - "$port" "$timeout_seconds" <<'PY'
+import sys
+import time
+import urllib.error
+import urllib.request
+
+port = sys.argv[1]
+timeout_seconds = float(sys.argv[2])
+deadline = time.time() + timeout_seconds
+url = f"http://127.0.0.1:{port}/health"
+last_error = "belum ada respons"
+
+while time.time() < deadline:
+    try:
+        with urllib.request.urlopen(url, timeout=2) as response:
+            if 200 <= response.status < 300:
+                raise SystemExit(0)
+            last_error = f"HTTP {response.status}"
+    except Exception as exc:
+        last_error = exc
+    time.sleep(0.5)
+
+raise SystemExit(
+    f"Backend tidak siap dalam {timeout_seconds:.0f} detik ({url}): {last_error}"
+)
+PY
+}
+
 start_edge() {
   local python_bin="$1"
   local python_cmd quoted_python
@@ -340,7 +374,9 @@ start_services() {
   log "Edge python    : $edge_python"
   log "Backend uvicorn: $uvicorn_bin"
 
+  delete_if_exists "$EDGE_NAME"
   start_backend "$uvicorn_bin"
+  wait_for_backend_ready "$backend_python" "$BACKEND_PORT"
   start_edge "$edge_python"
   start_frontend
   save_pm2_state
