@@ -375,12 +375,8 @@ export default function DashboardPage() {
         changePercents={changePercents}
       />
 
-      {/* ===== INSIGHTS ===== */}
-      <InsightsPanel
-        insights={insights}
-        totalEvents={totalEvents}
-        uniqueVisitors={uniqueVisitors}
-      />
+    
+    
 
       {/* ===== CHARTS ROW 2: Doughnut + Camera (2 column) ===== */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
