@@ -1152,17 +1152,22 @@ def report_csv(
 def report_events(
     from_date: date,
     to_date: date,
+    from_datetime: Optional[datetime] = None,
+    to_datetime: Optional[datetime] = None,
     camera_id: Optional[int] = None,
     limit: int = 1000,
     session: Session = Depends(get_session),
     _: User = Depends(require_role("ADMIN", "OPERATOR"))
 ):
     """Get detailed visit events for reporting"""
-    from datetime import datetime as dt
-    
+    start_at = from_datetime or datetime.combine(from_date, datetime.min.time())
+    end_at = to_datetime or datetime.combine(to_date, datetime.max.time())
+    if start_at > end_at:
+        raise HTTPException(status_code=422, detail="Rentang waktu tidak valid.")
+
     q = select(VisitEvent).where(
-        VisitEvent.event_time >= dt.combine(from_date, dt.min.time()),
-        VisitEvent.event_time <= dt.combine(to_date, dt.max.time())
+        VisitEvent.event_time >= start_at,
+        VisitEvent.event_time <= end_at
     )
     if camera_id:
         q = q.where(VisitEvent.camera_id == camera_id)
@@ -1207,18 +1212,25 @@ def delete_event(event_id: int, session: Session = Depends(get_session), _: User
 def list_visitor_daily(
     from_date: Optional[date] = None,
     to_date: Optional[date] = None,
+    from_datetime: Optional[datetime] = None,
+    to_datetime: Optional[datetime] = None,
     limit: int = 500,
     session: Session = Depends(get_session),
     _: User = Depends(require_role("ADMIN", "OPERATOR"))
 ):
     """List unique daily visitors"""
-    from datetime import datetime as dt
-    
+    if from_datetime and to_datetime and from_datetime > to_datetime:
+        raise HTTPException(status_code=422, detail="Rentang waktu tidak valid.")
+
     q = select(VisitorDaily)
     if from_date:
         q = q.where(VisitorDaily.visit_date >= from_date)
     if to_date:
         q = q.where(VisitorDaily.visit_date <= to_date)
+    if from_datetime:
+        q = q.where(VisitorDaily.last_seen_at >= from_datetime)
+    if to_datetime:
+        q = q.where(VisitorDaily.first_seen_at <= to_datetime)
     
     visitors = session.exec(q.order_by(VisitorDaily.visit_date.desc()).limit(limit)).all()
     

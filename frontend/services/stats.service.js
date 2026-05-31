@@ -30,10 +30,25 @@ export function fetchDaily(day, fromDate, toDate) {
 /**
  * GET /api/reports/events — detailed visit events for reporting.
  */
-export function fetchEvents(fromDate, toDate, cameraId) {
-  let url = `/api/reports/events?from_date=${fromDate}&to_date=${toDate}`;
-  if (cameraId) url += `&camera_id=${cameraId}`;
-  return get(url);
+export function fetchEvents(fromDate, toDate, options = {}) {
+  const normalizedOptions =
+    typeof options === "number" ? { cameraId: options } : options;
+  const params = new URLSearchParams({
+    from_date: fromDate,
+    to_date: toDate,
+  });
+
+  if (normalizedOptions.cameraId) {
+    params.set("camera_id", String(normalizedOptions.cameraId));
+  }
+  if (normalizedOptions.fromDateTime) {
+    params.set("from_datetime", normalizedOptions.fromDateTime);
+  }
+  if (normalizedOptions.toDateTime) {
+    params.set("to_datetime", normalizedOptions.toDateTime);
+  }
+
+  return get(`/api/reports/events?${params.toString()}`);
 }
 
 /**
@@ -50,13 +65,20 @@ export function fetchStatsPerSecond(day, cameraId) {
 /**
  * GET /api/visitors/daily — unique daily visitors.
  */
-export function fetchVisitorDaily(fromDate, toDate) {
-  let url = `/api/visitors/daily`;
-  const params = [];
-  if (fromDate) params.push(`from_date=${fromDate}`);
-  if (toDate) params.push(`to_date=${toDate}`);
-  if (params.length) url += `?${params.join("&")}`;
-  return get(url);
+export function fetchVisitorDaily(fromDate, toDate, options = {}) {
+  const params = new URLSearchParams();
+
+  if (fromDate) params.set("from_date", fromDate);
+  if (toDate) params.set("to_date", toDate);
+  if (options.fromDateTime) {
+    params.set("from_datetime", options.fromDateTime);
+  }
+  if (options.toDateTime) {
+    params.set("to_datetime", options.toDateTime);
+  }
+
+  const query = params.toString();
+  return get(query ? `/api/visitors/daily?${query}` : "/api/visitors/daily");
 }
 
 /**

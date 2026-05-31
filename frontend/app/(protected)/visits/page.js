@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { fetchEvents, fetchVisitorDaily } from "@/services/stats.service";
-import { formatNumber, todayISO } from "@/lib/utils";
+import { todayISO } from "@/lib/utils";
 import Table from "@/components/ui/Table";
 import Section from "@/components/ui/Section";
 import Button from "@/components/ui/Button";
@@ -11,16 +11,100 @@ import Alert from "@/components/ui/Alert";
 import Heading from "@/components/ui/Heading";
 import Input from "@/components/ui/Input";
 import Select from "@/components/ui/Select";
-import Stat from "@/components/ui/Stat";
 import Paragraph from "@/components/ui/Paragraph";
 import StatsGrid from "@/components/dashboard/StatsGrid";
+
+const PERIOD_OPTIONS = [
+  { value: "daily", label: "Harian" },
+  { value: "monthly", label: "Bulanan" },
+  { value: "yearly", label: "Tahunan" },
+];
+
+function getMonthStart(monthValue) {
+  return `${monthValue}-01`;
+}
+
+function getMonthEnd(monthValue) {
+  const [year, month] = monthValue.split("-").map(Number);
+  const lastDay = new Date(year, month, 0).getDate();
+  return `${monthValue}-${String(lastDay).padStart(2, "0")}`;
+}
+
+function buildAppliedPeriod({
+  periodType,
+  selectedDay,
+  fromTime,
+  toTime,
+  fromMonth,
+  toMonth,
+  fromYear,
+  toYear,
+}) {
+  if (periodType === "daily") {
+    return {
+      periodType,
+      fromDate: selectedDay,
+      toDate: selectedDay,
+      fromDateTime: `${selectedDay}T${fromTime}:00`,
+      toDateTime: `${selectedDay}T${toTime}:59`,
+      displayLabel: `${selectedDay} ${fromTime} s/d ${toTime}`,
+      summaryLabel: `Tanggal ${selectedDay}, jam ${fromTime} - ${toTime}`,
+    };
+  }
+
+  if (periodType === "monthly") {
+    const fromDate = getMonthStart(fromMonth);
+    const toDate = getMonthEnd(toMonth);
+    return {
+      periodType,
+      fromDate,
+      toDate,
+      fromDateTime: null,
+      toDateTime: null,
+      displayLabel: `${fromDate} s/d ${toDate}`,
+      summaryLabel: `Bulan ${fromMonth} s/d ${toMonth}`,
+    };
+  }
+
+  const fromDate = `${fromYear}-01-01`;
+  const toDate = `${toYear}-12-31`;
+  return {
+    periodType,
+    fromDate,
+    toDate,
+    fromDateTime: null,
+    toDateTime: null,
+    displayLabel: `${fromDate} s/d ${toDate}`,
+    summaryLabel: `Tahun ${fromYear} s/d ${toYear}`,
+  };
+}
 
 export default function VisitsPage() {
   const { user } = useAuth();
   const today = todayISO();
+  const currentMonth = today.slice(0, 7);
+  const currentYear = today.slice(0, 4);
 
-  const [fromDate, setFromDate] = useState(today);
-  const [toDate, setToDate] = useState(today);
+  const [periodType, setPeriodType] = useState("daily");
+  const [selectedDay, setSelectedDay] = useState(today);
+  const [fromTime, setFromTime] = useState("00:00");
+  const [toTime, setToTime] = useState("23:59");
+  const [fromMonth, setFromMonth] = useState(currentMonth);
+  const [toMonth, setToMonth] = useState(currentMonth);
+  const [fromYear, setFromYear] = useState(currentYear);
+  const [toYear, setToYear] = useState(currentYear);
+  const [appliedPeriod, setAppliedPeriod] = useState(() =>
+    buildAppliedPeriod({
+      periodType: "daily",
+      selectedDay: today,
+      fromTime: "00:00",
+      toTime: "23:59",
+      fromMonth: currentMonth,
+      toMonth: currentMonth,
+      fromYear: currentYear,
+      toYear: currentYear,
+    }),
+  );
   const [events, setEvents] = useState([]);
   const [visitors, setVisitors] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -33,6 +117,16 @@ export default function VisitsPage() {
   const [visitorSearch, setVisitorSearch] = useState("");
   const [visitorNotesFilter, setVisitorNotesFilter] = useState("ALL");
   const [visitorDateFilter, setVisitorDateFilter] = useState("ALL");
+  const yearOptions = useMemo(() => {
+    const currentYearNumber = Number(currentYear);
+    return Array.from(
+      { length: currentYearNumber - 2000 + 1 },
+      (_, index) => {
+        const year = String(currentYearNumber - index);
+        return { value: year, label: year };
+      },
+    );
+  }, [currentYear]);
 
   // Only admin can access this page
   if (user?.role !== "ADMIN") {
@@ -46,13 +140,19 @@ export default function VisitsPage() {
     );
   }
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (period) => {
     setLoading(true);
     setError("");
     try {
       const [eventsData, visitorsData] = await Promise.all([
-        fetchEvents(fromDate, toDate).catch(() => []),
-        fetchVisitorDaily(fromDate, toDate).catch(() => []),
+        fetchEvents(period.fromDate, period.toDate, {
+          fromDateTime: period.fromDateTime,
+          toDateTime: period.toDateTime,
+        }).catch(() => []),
+        fetchVisitorDaily(period.fromDate, period.toDate, {
+          fromDateTime: period.fromDateTime,
+          toDateTime: period.toDateTime,
+        }).catch(() => []),
       ]);
       setEvents(eventsData);
       setVisitors(visitorsData);
@@ -61,11 +161,11 @@ export default function VisitsPage() {
     } finally {
       setLoading(false);
     }
-  }, [fromDate, toDate]);
+  }, []);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    load(appliedPeriod);
+  }, [appliedPeriod, load]);
 
   const eventColumns = [
     "ID",
@@ -213,38 +313,13 @@ export default function VisitsPage() {
   ]);
 
   // Calculate stats for StatsGrid
-  const day = fromDate === toDate ? fromDate : `${fromDate} s/d ${toDate}`;
+  const day = appliedPeriod.displayLabel;
   const customerEvents = events.filter((e) => e.person_type !== "EMPLOYEE");
   const ignoredEmployeeEvents = events.filter((e) => e.person_type === "EMPLOYEE").length;
   const uniqueVisitors = visitors.length;
   const totalIn = uniqueVisitors;
   const totalOut = customerEvents.filter((e) => e.direction === "OUT").length;
   const totalEvents = totalIn + totalOut;
-  const filteredEventEmployees = filteredEvents.filter(
-    (event) => event.person_type === "EMPLOYEE",
-  ).length;
-  const filteredEventIn = filteredEvents.filter(
-    (event) => event.direction === "IN",
-  ).length;
-  const filteredEventOut = filteredEvents.filter(
-    (event) => event.direction === "OUT",
-  ).length;
-  const filteredVisitorsWithNotes = filteredVisitors.filter(
-    (visitor) => visitor.notes?.trim(),
-  ).length;
-  const filteredVisitorDays = new Set(
-    filteredVisitors.map((visitor) => visitor.visit_date),
-  ).size;
-  const averageVisitMinutes = filteredVisitors.length
-    ? filteredVisitors.reduce((sum, visitor) => {
-        const durationMs =
-          new Date(visitor.last_seen_at).getTime() -
-          new Date(visitor.first_seen_at).getTime();
-        return sum + Math.max(durationMs, 0);
-      }, 0) /
-        filteredVisitors.length /
-        60000
-    : 0;
 
   function resetEventFilters() {
     setEventSearch("");
@@ -259,12 +334,69 @@ export default function VisitsPage() {
     setVisitorDateFilter("ALL");
   }
 
+  function handleFromTimeChange(value) {
+    setFromTime(value);
+    if (value > toTime) {
+      setToTime(value);
+    }
+  }
+
+  function handleToTimeChange(value) {
+    setToTime(value);
+    if (value < fromTime) {
+      setFromTime(value);
+    }
+  }
+
+  function handleFromMonthChange(value) {
+    setFromMonth(value);
+    if (value > toMonth) {
+      setToMonth(value);
+    }
+  }
+
+  function handleToMonthChange(value) {
+    setToMonth(value);
+    if (value < fromMonth) {
+      setFromMonth(value);
+    }
+  }
+
+  function handleFromYearChange(value) {
+    setFromYear(value);
+    if (value > toYear) {
+      setToYear(value);
+    }
+  }
+
+  function handleToYearChange(value) {
+    setToYear(value);
+    if (value < fromYear) {
+      setFromYear(value);
+    }
+  }
+
+  function handleApplyPeriod() {
+    setAppliedPeriod(
+      buildAppliedPeriod({
+        periodType,
+        selectedDay,
+        fromTime,
+        toTime,
+        fromMonth,
+        toMonth,
+        fromYear,
+        toYear,
+      }),
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div>
         <Heading level={1}>Data Kunjungan</Heading>
         <Paragraph>
-          Lihat dan kelola data event kunjungan dan pengunjung unik harian.
+          Lihat dan kelola data event kunjungan dan pengunjung unik berdasarkan periode.
         </Paragraph>
       </div>
 
@@ -277,34 +409,108 @@ export default function VisitsPage() {
 
       {/* Date filter */}
       <Section title="Filter Periode">
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,220px)_minmax(0,220px)_auto] md:items-end">
-          <Input
-            label="Dari"
-            type="date"
-            value={fromDate}
-            max={toDate}
-            onChange={(e) => setFromDate(e.target.value)}
-            className="input-sm"
-          />
-          <Input
-            label="Sampai"
-            type="date"
-            value={toDate}
-            min={fromDate}
-            max={today}
-            onChange={(e) => setToDate(e.target.value)}
-            className="input-sm"
-          />
-          <div className="flex items-end">
-            <Button
-              variant="primary"
-              loading={loading}
-              onClick={load}
-              className="btn-sm w-full md:w-fit"
-            >
-              Muat Data
-            </Button>
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            {PERIOD_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setPeriodType(option.value)}
+                className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
+                  periodType === option.value
+                    ? "bg-primary text-primary-content shadow-md shadow-primary/20"
+                    : "bg-base-200 text-base-content/70 hover:bg-base-300"
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
           </div>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4 xl:items-end">
+            {periodType === "daily" && (
+              <>
+                <Input
+                  label="Tanggal"
+                  type="date"
+                  value={selectedDay}
+                  max={today}
+                  onChange={(e) => setSelectedDay(e.target.value)}
+                  className="input-sm"
+                />
+                <Input
+                  label="Dari Jam"
+                  type="time"
+                  value={fromTime}
+                  max={toTime}
+                  onChange={(e) => handleFromTimeChange(e.target.value)}
+                  className="input-sm"
+                />
+                <Input
+                  label="Sampai Jam"
+                  type="time"
+                  value={toTime}
+                  min={fromTime}
+                  onChange={(e) => handleToTimeChange(e.target.value)}
+                  className="input-sm"
+                />
+              </>
+            )}
+
+            {periodType === "monthly" && (
+              <>
+                <Input
+                  label="Dari Bulan"
+                  type="month"
+                  value={fromMonth}
+                  max={toMonth}
+                  onChange={(e) => handleFromMonthChange(e.target.value)}
+                  className="input-sm"
+                />
+                <Input
+                  label="Sampai Bulan"
+                  type="month"
+                  value={toMonth}
+                  min={fromMonth}
+                  max={currentMonth}
+                  onChange={(e) => handleToMonthChange(e.target.value)}
+                  className="input-sm"
+                />
+              </>
+            )}
+
+            {periodType === "yearly" && (
+              <>
+                <Select
+                  label="Dari Tahun"
+                  options={yearOptions}
+                  value={fromYear}
+                  onChange={(e) => handleFromYearChange(e.target.value)}
+                />
+                <Select
+                  label="Sampai Tahun"
+                  options={yearOptions}
+                  value={toYear}
+                  onChange={(e) => handleToYearChange(e.target.value)}
+                />
+              </>
+            )}
+
+            <div className="flex items-end">
+              <Button
+                variant="primary"
+                loading={loading}
+                onClick={handleApplyPeriod}
+                className="btn-sm w-full xl:w-fit"
+              >
+                Muat Data
+              </Button>
+            </div>
+          </div>
+
+          <p className="text-sm text-base-content/60">
+            Rentang aktif: {appliedPeriod.summaryLabel}
+          </p>
         </div>
       </Section>
 
@@ -335,9 +541,7 @@ export default function VisitsPage() {
 
       {/* Tables */}
       {tab === "events" && (
-        <Section title={`Event Kunjungan (${fromDate} s/d ${toDate})`}>
-          
-
+        <Section title={`Event Kunjungan (${appliedPeriod.displayLabel})`}>
           <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
             <Input
               label="Cari Event"
@@ -387,9 +591,7 @@ export default function VisitsPage() {
       )}
 
       {tab === "visitors" && (
-        <Section title={`Pengunjung Unik Harian (${fromDate} s/d ${toDate})`}>
-         
-
+        <Section title={`Pengunjung Unik (${appliedPeriod.displayLabel})`}>
           <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             <Input
               label="Cari Visitor"
