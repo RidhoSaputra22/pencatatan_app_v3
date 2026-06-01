@@ -1,6 +1,5 @@
 "use client";
 
-import { formatNumber } from "@/lib/utils";
 import CountUp from "react-countup";
 
 function ChangeBadge({ value }) {
@@ -118,12 +117,17 @@ export default function StatsGrid({
   totalIn,
   totalOut,
   changePercents = {},
+  hiddenKeys = [],
 }) {
   const values = { totalEvents, totalIn, totalOut, uniqueVisitors };
+  const visibleItems = KPI_CONFIG.filter(({ key }) => !hiddenKeys.includes(key));
+  const gridClassName = visibleItems.length === 3
+    ? "grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3"
+    : "grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4";
 
   return (
-    <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
-      {KPI_CONFIG.map(({ key, label, sub, gradient, borderColor, valueColor, bgIcon, sparkColor, icon }) => (
+    <section className={gridClassName}>
+      {visibleItems.map(({ key, label, sub, gradient, borderColor, valueColor, bgIcon, sparkColor, icon }) => (
         <div
           key={key}
           className={`relative overflow-hidden card bg-gradient-to-br ${gradient} bg-base-100 shadow-lg border-l-4 ${borderColor} p-5 transition-all duration-300 hover:shadow-xl hover:-translate-y-0.5 group`}
