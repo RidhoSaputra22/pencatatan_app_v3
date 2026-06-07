@@ -152,6 +152,22 @@ def normalize_recording_save_mode(value: str) -> str:
     return aliases.get(raw, raw if raw in {"detection", "raw"} else "detection")
 
 
+def normalize_recording_file_mode(value: str) -> str:
+    raw = (value or "").strip().lower()
+    aliases = {
+        "segmen": "segment",
+        "segmented": "segment",
+        "segmentasi": "segment",
+        "continuous": "session",
+        "full": "session",
+        "full_session": "session",
+        "single": "session",
+        "one_file": "session",
+        "sesi": "session",
+    }
+    return aliases.get(raw, raw if raw in {"segment", "session"} else "segment")
+
+
 def _optional_project_path(value: str) -> str:
     raw = (value or "").strip()
     return resolve_project_path(raw) if raw else ""
@@ -217,6 +233,7 @@ EDGE_CAPTURE_FFMPEG_OPTIONS = env(
     "EDGE_CAPTURE_FFMPEG_OPTIONS",
     "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|max_delay;500000|reorder_queue_size;0",
 ).strip()
+EDGE_LOCAL_FILE_STOP_ON_END = env_bool("EDGE_LOCAL_FILE_STOP_ON_END", False)
 EDGE_LOCAL_FILE_REPLAY_POST_EVENTS = env_bool("EDGE_LOCAL_FILE_REPLAY_POST_EVENTS", False)
 
 # Processed footage backup configuration
@@ -224,6 +241,7 @@ EDGE_RECORDING_ENABLED = env_bool("EDGE_RECORDING_ENABLED", True)
 EDGE_RECORDING_OUTPUT_DIR = resolve_project_path(
     env("EDGE_RECORDING_OUTPUT_DIR", "./backend/storage/footage")
 )
+EDGE_RECORDING_FILE_MODE = normalize_recording_file_mode(env("EDGE_RECORDING_FILE_MODE", "segment"))
 EDGE_RECORDING_SEGMENT_MINUTES = max(1, env_int("EDGE_RECORDING_SEGMENT_MINUTES", 10))
 EDGE_RECORDING_SEGMENT_SECONDS = EDGE_RECORDING_SEGMENT_MINUTES * 60
 EDGE_RECORDING_FPS = max(0.0, env_float("EDGE_RECORDING_FPS", 0.0))

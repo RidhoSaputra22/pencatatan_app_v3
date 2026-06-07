@@ -26,9 +26,11 @@ from .config import (
     CAMERA_ID,
     CONFIG_REFRESH,
     EDGE_FILE_FRAME_STEP,
+    EDGE_LOCAL_FILE_STOP_ON_END,
     EDGE_LOCAL_FILE_REPLAY_POST_EVENTS,
     EDGE_PROCESSING_MAX_FPS,
     EDGE_RECORDING_ENABLED,
+    EDGE_RECORDING_FILE_MODE,
     EDGE_RECORDING_FILE_PREFIX,
     EDGE_RECORDING_FPS,
     EDGE_RECORDING_MAX_GAP_SECONDS,
@@ -91,7 +93,7 @@ from .face_recognition import EmployeeFaceRecognizer
 from .logger import get_logger
 from .reid import cleanup_old_tracks, reset_daily_cache, update_track_identity
 from .recording import SegmentedVideoRecorder
-from .streaming import has_raw_stream_clients, update_latest_frame
+from .streaming import clear_latest_frame, has_raw_stream_clients, update_latest_frame
 from .tracker import ByteTrackTracker, CentroidTracker, DEEPSORT_AVAILABLE, DeepSORTTracker
 from .visualization import draw_bounding_boxes, draw_exit_gate, draw_info_overlay, draw_roi_polygon
 
@@ -115,6 +117,7 @@ _TRACKER_REBUILD_KEYS = {
 _RECORDING_REBUILD_KEYS = {
     "EDGE_RECORDING_ENABLED",
     "EDGE_RECORDING_SAVE_MODE",
+    "EDGE_RECORDING_FILE_MODE",
     "EDGE_RECORDING_SEGMENT_MINUTES",
     "EDGE_RECORDING_FPS",
     "EDGE_RECORDING_MAX_GAP_SECONDS",
@@ -274,6 +277,16 @@ def _apply_runtime_config(payload: Dict[str, Any], model: Any) -> Dict[str, Any]
         if previous != file_frame_step:
             changed.append("EDGE_FILE_FRAME_STEP")
 
+    if "EDGE_LOCAL_FILE_STOP_ON_END" in values:
+        stop_on_end = _runtime_bool(
+            values["EDGE_LOCAL_FILE_STOP_ON_END"],
+            EDGE_LOCAL_FILE_STOP_ON_END,
+        )
+        mark(
+            "EDGE_LOCAL_FILE_STOP_ON_END",
+            _set_across_modules("EDGE_LOCAL_FILE_STOP_ON_END", stop_on_end, (config_module,)),
+        )
+
     if "EDGE_LOCAL_FILE_REPLAY_POST_EVENTS" in values:
         replay_events = _runtime_bool(
             values["EDGE_LOCAL_FILE_REPLAY_POST_EVENTS"],
@@ -302,6 +315,15 @@ def _apply_runtime_config(payload: Dict[str, Any], model: Any) -> Dict[str, Any]
         mark(
             "EDGE_RECORDING_SAVE_MODE",
             _set_across_modules("EDGE_RECORDING_SAVE_MODE", recording_mode, (config_module,)),
+        )
+
+    if "EDGE_RECORDING_FILE_MODE" in values:
+        recording_file_mode = config_module.normalize_recording_file_mode(
+            str(values["EDGE_RECORDING_FILE_MODE"] or "segment")
+        )
+        mark(
+            "EDGE_RECORDING_FILE_MODE",
+            _set_across_modules("EDGE_RECORDING_FILE_MODE", recording_file_mode, (config_module,)),
         )
 
     if "EDGE_RECORDING_SEGMENT_MINUTES" in values:
@@ -1239,15 +1261,23 @@ def _build_backup_recorder() -> SegmentedVideoRecorder:
         enabled=EDGE_RECORDING_ENABLED,
         max_gap_seconds=EDGE_RECORDING_MAX_GAP_SECONDS,
         file_prefix=EDGE_RECORDING_FILE_PREFIX,
+        recording_mode=EDGE_RECORDING_FILE_MODE,
     )
 
     if recorder.enabled:
-        log.info(
-            "CCTV recording active: mode=%s, every %d minute(s) -> %s",
-            EDGE_RECORDING_SAVE_MODE,
-            EDGE_RECORDING_SEGMENT_MINUTES,
-            EDGE_RECORDING_OUTPUT_DIR,
-        )
+        if EDGE_RECORDING_FILE_MODE == "session":
+            log.info(
+                "CCTV recording active: save_mode=%s, file_mode=session (one file per edge session) -> %s",
+                EDGE_RECORDING_SAVE_MODE,
+                EDGE_RECORDING_OUTPUT_DIR,
+            )
+        else:
+            log.info(
+                "CCTV recording active: save_mode=%s, file_mode=segment every %d minute(s) -> %s",
+                EDGE_RECORDING_SAVE_MODE,
+                EDGE_RECORDING_SEGMENT_MINUTES,
+                EDGE_RECORDING_OUTPUT_DIR,
+            )
     else:
         log.info("CCTV recording disabled")
 
@@ -1408,6 +1438,7 @@ def real_loop():
     output_writer = None
     output_video_path = None
     backup_recorder = _build_backup_recorder()
+    stopped_local_file_source = ""
 
     # Processing cadence is independent from stream cadence; the stream layer can
     # duplicate the latest annotated frame between inference updates.
@@ -1477,9 +1508,27 @@ def real_loop():
                     log.debug("Stream URL: %s", stream_url)
 
             if not stream_url:
+                if stopped_local_file_source:
+                    stopped_local_file_source = ""
+                    clear_latest_frame()
                 source_hint = "TEST_INPUT" if is_video_test else "EDGE_STREAM_URL"
                 log.warning("Stream URL not set. Configure via UI or env %s", source_hint)
                 time.sleep(5)
+                continue
+
+            hold_local_file_at_end = (
+                bool(stopped_local_file_source)
+                and stopped_local_file_source == stream_url
+                and _is_local_file_source(stream_url)
+                and EDGE_LOCAL_FILE_STOP_ON_END
+            )
+            if stopped_local_file_source and not hold_local_file_at_end:
+                stopped_local_file_source = ""
+                events_enabled = base_events_enabled
+                local_file_events_consumed = False
+                clear_latest_frame()
+            elif hold_local_file_at_end:
+                time.sleep(0.25)
                 continue
 
             if cap_source != stream_url and cap is not None:
@@ -1515,7 +1564,8 @@ def real_loop():
                     if is_video_test:
                         log.info("Video test input finished.")
                         break
-                    if _is_local_file_source(stream_url) and events_enabled:
+                    is_local_file = _is_local_file_source(stream_url)
+                    if is_local_file and events_enabled:
                         finalized = _finalize_open_exit_states(
                             visitor_states,
                             visitor_flow_states,
@@ -1531,6 +1581,36 @@ def real_loop():
                         if finalized:
                             log.info("Finalized %d OUT event(s) before local replay", finalized)
 
+                    if is_local_file and EDGE_LOCAL_FILE_STOP_ON_END:
+                        stopped_local_file_source = stream_url
+                        visitor_states = {}
+                        visitor_flow_states = {}
+                        recent_lost_tracks = {}
+                        track_identity_aliases = {}
+                        last_event_time = {}
+                        face_recognizer.reset_daily()
+                        tracker, tracker_mode = _build_tracker()
+                        events_enabled = base_events_enabled
+                        local_file_events_consumed = False
+                        backup_recorder.reset(reason="local file ended (stop on end)")
+                        clear_latest_frame(
+                            status="stopped",
+                            detail=(
+                                "Playback video lokal selesai. "
+                                "Ganti sumber stream atau matikan opsi berhenti saat file habis untuk memutar lagi."
+                            ),
+                        )
+                        log.info("Local video source finished once; playback stopped at EOF without replay")
+                        cap.release()
+                        cap = None
+                        cap_source = ""
+                        cap_started_ts = 0.0
+                        last_good_frame_ts = 0.0
+                        last_frame_id = 0
+                        time.sleep(0.25)
+                        continue
+
+                    if is_local_file and events_enabled:
                         if EDGE_LOCAL_FILE_REPLAY_POST_EVENTS:
                             visitor_states = {}
                             visitor_flow_states = {}

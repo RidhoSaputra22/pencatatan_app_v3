@@ -297,7 +297,8 @@ export default function CameraView() {
         cleanupPeerConnection();
         setTransportState("", "", "");
         setError(
-          "Camera stream not available. Pastikan edge worker aktif atau relay backend menerima frame.",
+          edge?.status_detail
+            || "Camera stream not available. Pastikan edge worker aktif atau relay backend menerima frame.",
         );
         setLoading(false);
       } finally {

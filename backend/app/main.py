@@ -1420,11 +1420,14 @@ def _parse_recording_metadata(filename: str) -> Optional[dict]:
     except ValueError:
         return None
 
+    duration_minutes = round((recorded_until - recorded_from).total_seconds() / 60, 2)
+
     return {
         "camera_id": int(match.group("camera_id")),
         "recorded_from": recorded_from,
         "recorded_until": recorded_until,
-        "segment_minutes": round((recorded_until - recorded_from).total_seconds() / 60, 2),
+        "segment_minutes": duration_minutes,
+        "duration_minutes": duration_minutes,
     }
 
 
@@ -1468,6 +1471,7 @@ def _serialize_footage_file(file_path: Path) -> dict:
                 "recorded_from": recording_meta["recorded_from"].isoformat(),
                 "recorded_until": recording_meta["recorded_until"].isoformat(),
                 "segment_minutes": recording_meta["segment_minutes"],
+                "duration_minutes": recording_meta["duration_minutes"],
             }
         )
     return payload
@@ -1737,7 +1741,7 @@ def list_footage(_: User = Depends(require_role("ADMIN", "OPERATOR"))):
 
 @app.get("/api/recordings")
 def list_recordings(_: User = Depends(require_role("ADMIN", "OPERATOR"))):
-    """List rekaman otomatis CCTV yang sudah selesai dipotong per segmen."""
+    """List rekaman otomatis CCTV yang sudah difinalkan edge worker."""
     return _list_serialized_footage(auto_only=True)
 
 

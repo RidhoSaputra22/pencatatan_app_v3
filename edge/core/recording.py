@@ -1,4 +1,4 @@
-"""Segmented recording utilities for processed YOLO footage."""
+"""Recording utilities for processed YOLO footage."""
 from __future__ import annotations
 
 import os
@@ -155,14 +155,14 @@ def _queue_recording_finalization(source_path: Path, final_path: Path) -> None:
 @dataclass
 class SegmentInfo:
     start_ts: float
-    end_ts: float
-    final_path: Path
+    end_ts: Optional[float]
     temp_path: Path
-    optimizing_path: Path
+    final_path: Optional[Path]
+    optimizing_path: Optional[Path]
 
 
 class SegmentedVideoRecorder:
-    """Record processed frames into fixed-duration MP4 segments."""
+    """Record processed frames as fixed segments or a full edge session."""
 
     def __init__(
         self,
@@ -174,6 +174,7 @@ class SegmentedVideoRecorder:
         enabled: bool = True,
         max_gap_seconds: float = 5.0,
         file_prefix: str = "yolo_backup",
+        recording_mode: str = "segment",
     ) -> None:
         self.output_dir = Path(output_dir)
         self.camera_id = camera_id
@@ -182,6 +183,7 @@ class SegmentedVideoRecorder:
         self.enabled = bool(enabled)
         self.max_gap_seconds = max(float(max_gap_seconds), 1.0)
         self.file_prefix = file_prefix.strip() or "yolo_backup"
+        self.recording_mode = "session" if str(recording_mode).strip().lower() == "session" else "segment"
         self.frame_interval = 1.0 / self.fps
 
         self._writer: Optional[cv2.VideoWriter] = None
@@ -189,6 +191,9 @@ class SegmentedVideoRecorder:
         self._next_emit_ts: Optional[float] = None
         self._frame_size: Optional[Tuple[int, int]] = None
         self._last_frame_ts: Optional[float] = None
+        self._session_label_start_ts: Optional[float] = (
+            time.time() if self.enabled and self.recording_mode == "session" else None
+        )
 
         if self.enabled:
             self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -203,19 +208,32 @@ class SegmentedVideoRecorder:
             final_name = optimizing_path.name.replace(".optimizing.mp4", ".mp4")
             _queue_recording_finalization(optimizing_path, optimizing_path.with_name(final_name))
 
-    def _segment_paths(self, start_ts: float) -> Tuple[Path, Path, Path, float]:
-        end_ts = start_ts + self.segment_seconds
+    def _final_paths(self, start_ts: float, end_ts: float) -> Tuple[Path, Path]:
         stem = (
             f"{self.file_prefix}_cam{self.camera_id}_"
             f"{_segment_stamp(start_ts)}_{_segment_stamp(end_ts)}"
         )
         final_path = self.output_dir / f"{stem}.mp4"
-        temp_path = self.output_dir / f"{stem}.partial.mp4"
         optimizing_path = _optimizing_path(final_path)
-        return final_path, temp_path, optimizing_path, end_ts
+        return final_path, optimizing_path
+
+    def _temp_path(self, start_ts: float) -> Path:
+        suffix = "session" if self.recording_mode == "session" else "segment"
+        stem = f"{self.file_prefix}_cam{self.camera_id}_{_segment_stamp(start_ts)}_{suffix}"
+        return self.output_dir / f"{stem}.partial.mp4"
 
     def _open_segment(self, start_ts: float, frame: np.ndarray) -> bool:
-        final_path, temp_path, optimizing_path, end_ts = self._segment_paths(start_ts)
+        label_start_ts = (
+            float(self._session_label_start_ts)
+            if self.recording_mode == "session" and self._session_label_start_ts is not None
+            else float(start_ts)
+        )
+        end_ts = label_start_ts + self.segment_seconds if self.recording_mode == "segment" else None
+        final_path = None
+        optimizing_path = None
+        if end_ts is not None:
+            final_path, optimizing_path = self._final_paths(label_start_ts, end_ts)
+        temp_path = self._temp_path(label_start_ts)
         frame_size = (int(frame.shape[1]), int(frame.shape[0]))
 
         writer = cv2.VideoWriter(
@@ -230,8 +248,8 @@ class SegmentedVideoRecorder:
 
         self._writer = writer
         self._segment = SegmentInfo(
-            start_ts=float(start_ts),
-            end_ts=float(end_ts),
+            start_ts=label_start_ts,
+            end_ts=float(end_ts) if end_ts is not None else None,
             final_path=final_path,
             temp_path=temp_path,
             optimizing_path=optimizing_path,
@@ -239,15 +257,22 @@ class SegmentedVideoRecorder:
         self._next_emit_ts = float(start_ts)
         self._frame_size = frame_size
 
-        log.info(
-            "Started YOLO backup segment: %s (duration=%ss, fps=%s)",
-            final_path.name,
-            int(self.segment_seconds),
-            self.fps,
-        )
+        if self.recording_mode == "session":
+            log.info(
+                "Started YOLO backup session: %s (fps=%s)",
+                temp_path.name,
+                self.fps,
+            )
+        else:
+            log.info(
+                "Started YOLO backup segment: %s (duration=%ss, fps=%s)",
+                final_path.name if final_path is not None else temp_path.name,
+                int(self.segment_seconds),
+                self.fps,
+            )
         return True
 
-    def _close_segment(self, *, complete: bool, reason: str) -> None:
+    def _close_segment(self, *, complete: bool, reason: str, end_ts: Optional[float] = None) -> None:
         if self._writer is not None:
             self._writer.release()
         self._writer = None
@@ -255,12 +280,22 @@ class SegmentedVideoRecorder:
         segment = self._segment
         if segment is not None:
             if complete:
-                segment.temp_path.replace(segment.optimizing_path)
-                _queue_recording_finalization(segment.optimizing_path, segment.final_path)
-                log.info("Queued CCTV recording optimization for %s", segment.final_path.name)
+                final_end_ts = float(end_ts if end_ts is not None else time.time())
+                final_end_ts = max(final_end_ts, segment.start_ts)
+                final_path = segment.final_path
+                optimizing_path = segment.optimizing_path
+                if final_path is None or optimizing_path is None:
+                    final_path, optimizing_path = self._final_paths(segment.start_ts, final_end_ts)
+                segment.end_ts = final_end_ts
+                segment.final_path = final_path
+                segment.optimizing_path = optimizing_path
+                segment.temp_path.replace(optimizing_path)
+                _queue_recording_finalization(optimizing_path, final_path)
+                log.info("Queued CCTV recording optimization for %s", final_path.name)
             else:
                 segment.temp_path.unlink(missing_ok=True)
-                segment.optimizing_path.unlink(missing_ok=True)
+                if segment.optimizing_path is not None:
+                    segment.optimizing_path.unlink(missing_ok=True)
                 log.info(
                     "Discarded incomplete YOLO backup segment %s (%s)",
                     segment.temp_path.name,
@@ -296,9 +331,9 @@ class SegmentedVideoRecorder:
                 if not self._open_segment(frame_ts, frame):
                     return
 
-            if self._next_emit_ts + EPSILON >= self._segment.end_ts:
+            if self._segment.end_ts is not None and self._next_emit_ts + EPSILON >= self._segment.end_ts:
                 boundary_ts = self._segment.end_ts
-                self._close_segment(complete=True, reason="segment completed")
+                self._close_segment(complete=True, reason="segment completed", end_ts=boundary_ts)
                 if not self._open_segment(boundary_ts, frame):
                     return
                 continue
@@ -313,13 +348,27 @@ class SegmentedVideoRecorder:
             return
         if self._writer is None and self._segment is None:
             self._last_frame_ts = None
+            if self.recording_mode == "session":
+                self._session_label_start_ts = time.time()
             return
-        self._close_segment(complete=False, reason=reason)
+        self._close_segment(
+            complete=self.recording_mode == "session",
+            reason=reason,
+            end_ts=self._last_frame_ts,
+        )
         self._last_frame_ts = None
+        if self.recording_mode == "session":
+            self._session_label_start_ts = time.time()
 
     def close(self) -> None:
         if not self.enabled:
             return
         if self._writer is not None or self._segment is not None:
-            self._close_segment(complete=False, reason="worker stopped")
+            self._close_segment(
+                complete=self.recording_mode == "session",
+                reason="worker stopped",
+                end_ts=self._last_frame_ts,
+            )
         self._last_frame_ts = None
+        if self.recording_mode == "session":
+            self._session_label_start_ts = time.time()

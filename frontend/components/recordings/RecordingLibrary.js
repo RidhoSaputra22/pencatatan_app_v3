@@ -24,9 +24,11 @@ import {
 const AUTO_REFRESH_MS = 30000;
 const PREVIEW_RETRY_MS = 5000;
 const RECORDING_SAVE_MODE_KEY = "EDGE_RECORDING_SAVE_MODE";
+const RECORDING_FILE_MODE_KEY = "EDGE_RECORDING_FILE_MODE";
 const RECORDING_CONFIG_KEYS = [
   "EDGE_RECORDING_ENABLED",
   RECORDING_SAVE_MODE_KEY,
+  RECORDING_FILE_MODE_KEY,
   "EDGE_RECORDING_SEGMENT_MINUTES",
   "EDGE_RECORDING_FPS",
   "EDGE_RECORDING_MAX_GAP_SECONDS",
@@ -45,6 +47,10 @@ function pickRecordingValues(values = {}) {
 
 function formatRecordingMode(value) {
   return value === "raw" ? "Raw" : "Deteksi";
+}
+
+function formatRecordingFileMode(value) {
+  return value === "session" ? "Satu Sesi Penuh" : "Segmen";
 }
 
 function formatDateLabel(dateKey) {
@@ -76,7 +82,9 @@ function formatConfigValue(item, value) {
   if (!item) return String(value ?? "-");
   if (item.type === "bool") return isTruthy(value) ? "Aktif" : "Nonaktif";
   if (item.type === "select") {
-    const option = (item.options || []).find((candidate) => candidate.value === value);
+    const option = (item.options || []).find(
+      (candidate) => candidate.value === value,
+    );
     return option?.label || String(value ?? "-");
   }
   if ((value ?? "") === "") return "-";
@@ -99,6 +107,13 @@ function modeDescription(mode) {
   return "Simpan hasil video yang sama seperti preview, lengkap dengan overlay deteksi.";
 }
 
+function recordingFileModeDescription(mode) {
+  if (mode === "session") {
+    return "Simpan satu file penuh sejak sesi recorder edge dimulai. File baru muncul setelah sesi berakhir, misalnya saat worker berhenti, sumber berubah, atau gap stream memicu reset.";
+  }
+  return "Potong rekaman otomatis per durasi tetap. File baru muncul setiap kali satu segmen selesai.";
+}
+
 function FolderArchiveIcon({ active = false }) {
   return (
     <svg
@@ -112,11 +127,7 @@ function FolderArchiveIcon({ active = false }) {
         fill="currentColor"
         opacity={active ? "0.95" : "0.82"}
       />
-      <path
-        d="M8 24h48"
-        stroke="rgba(255,255,255,0.55)"
-        strokeWidth="2.5"
-      />
+      <path d="M8 24h48" stroke="rgba(255,255,255,0.55)" strokeWidth="2.5" />
       <path
         d="M16 34h20"
         stroke="rgba(255,255,255,0.8)"
@@ -157,22 +168,14 @@ function VideoFileIcon() {
         stroke="currentColor"
         strokeWidth="2.4"
       />
-      <path
-        d="m24 23 5 3-5 3v-6Z"
-        fill="currentColor"
-      />
+      <path d="m24 23 5 3-5 3v-6Z" fill="currentColor" />
     </svg>
   );
 }
 
 function BackChevronIcon() {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      className="h-4 w-4"
-      fill="none"
-      aria-hidden="true"
-    >
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" aria-hidden="true">
       <path
         d="m15 6-6 6 6 6"
         stroke="currentColor"
@@ -194,6 +197,16 @@ function formatDateTime(value) {
   }).format(date);
 }
 
+function formatClockTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const seconds = String(date.getSeconds()).padStart(2, "0");
+  return `${hours}:${minutes}:${seconds}`;
+}
+
 function formatSize(sizeMb) {
   const numeric = Number(sizeMb || 0);
   if (!Number.isFinite(numeric)) return "0 MB";
@@ -204,9 +217,13 @@ function formatSize(sizeMb) {
 function buildRecordingUrl(recording) {
   if (!recording) return "";
   const relativePlaybackUrl =
-    recording.playback_url || `/api/recordings/${encodeURIComponent(recording.filename)}/media`;
+    recording.playback_url ||
+    `/api/recordings/${encodeURIComponent(recording.filename)}/media`;
   const versionToken = encodeURIComponent(
-    recording.preview_updated_at || recording.recorded_until || recording.uploaded_at || "",
+    recording.preview_updated_at ||
+      recording.recorded_until ||
+      recording.uploaded_at ||
+      "",
   );
   if (API_BASE) {
     return `${API_BASE}${relativePlaybackUrl}?v=${versionToken}`;
@@ -228,7 +245,7 @@ function RecordingConfigField({ item, value, changed, onChange }) {
   if (item.type === "bool") {
     return (
       <div
-        className={`rounded-2xl border p-4 transition ${
+        className={`rounded-md  p-4 transition ${
           changed
             ? "border-primary/60 bg-primary/10"
             : "border-base-300 bg-base-100/90"
@@ -263,7 +280,9 @@ function RecordingConfigField({ item, value, changed, onChange }) {
             type="checkbox"
             className="toggle toggle-primary mt-1 shrink-0"
             checked={isTruthy(value)}
-            onChange={(event) => onChange(item.key, event.target.checked ? "true" : "false")}
+            onChange={(event) =>
+              onChange(item.key, event.target.checked ? "true" : "false")
+            }
           />
         </label>
       </div>
@@ -274,7 +293,7 @@ function RecordingConfigField({ item, value, changed, onChange }) {
 
   return (
     <div
-      className={`rounded-2xl border p-4 transition ${
+      className={`rounded-md  py-3 transition ${
         changed
           ? "border-primary/60 bg-primary/10"
           : "border-base-300 bg-base-100/90"
@@ -296,7 +315,9 @@ function RecordingConfigField({ item, value, changed, onChange }) {
             )}
           </div>
           {hint && (
-            <p className="mt-2 text-xs leading-5 text-base-content/65">{hint}</p>
+            <p className="mt-2 text-xs leading-5 text-base-content/65">
+              {hint}
+            </p>
           )}
         </div>
         {rangeText && (
@@ -327,17 +348,18 @@ function RecordingConfigField({ item, value, changed, onChange }) {
   );
 }
 
-function RecordingModeOption({
+function RecordingOptionCard({
   option,
   active,
   disabled,
   loading,
   onSelect,
+  description,
 }) {
   return (
     <button
       type="button"
-      className={`w-full rounded-2xl border p-4 text-left transition ${
+      className={`w-full rounded-md border p-4 text-left transition ${
         active
           ? "border-primary bg-primary/12 shadow-sm"
           : "border-base-300 bg-base-100/85 hover:border-primary/40 hover:bg-base-100"
@@ -357,12 +379,14 @@ function RecordingModeOption({
             )}
           </div>
           <p className="mt-2 text-xs leading-5 text-base-content/65">
-            {modeDescription(option.value)}
+            {description}
           </p>
         </div>
         <span
           className={`mt-1 h-3 w-3 shrink-0 rounded-full ${
-            active ? "bg-primary shadow-[0_0_0_5px_rgba(168,85,247,0.16)]" : "bg-base-300"
+            active
+              ? "bg-primary shadow-[0_0_0_5px_rgba(168,85,247,0.16)]"
+              : "bg-base-300"
           }`}
         />
       </div>
@@ -414,7 +438,8 @@ export default function RecordingLibrary() {
       setVideoLoadError("");
       setSelectedFilename((current) => {
         if (result.length === 0) return "";
-        if (current && result.some((item) => item.filename === current)) return current;
+        if (current && result.some((item) => item.filename === current))
+          return current;
         return result[0].filename;
       });
     } catch (error) {
@@ -477,7 +502,9 @@ export default function RecordingLibrary() {
 
     recordings.forEach((recording) => {
       const dateKey = recordingDateKey(
-        recording.recorded_from || recording.recorded_until || recording.uploaded_at,
+        recording.recorded_from ||
+          recording.recorded_until ||
+          recording.uploaded_at,
       );
       if (!grouped.has(dateKey)) {
         grouped.set(dateKey, {
@@ -493,7 +520,8 @@ export default function RecordingLibrary() {
       group.items.push(recording);
       group.totalSizeMb += Number(recording.size_mb || 0);
       group.latestRecordedUntil =
-        group.latestRecordedUntil && group.latestRecordedUntil > (recording.recorded_until || "")
+        group.latestRecordedUntil &&
+        group.latestRecordedUntil > (recording.recorded_until || "")
           ? group.latestRecordedUntil
           : recording.recorded_until || group.latestRecordedUntil;
     });
@@ -518,21 +546,46 @@ export default function RecordingLibrary() {
   const isFolderView = archiveView === "folders";
 
   const selectedRecording =
-    recordings.find((item) => item.filename === selectedFilename) || recordings[0] || null;
-  const selectedRecordingUrl = selectedRecording ? buildRecordingUrl(selectedRecording) : "";
-  const currentRecordingMode = recordingValues[RECORDING_SAVE_MODE_KEY] || "detection";
+    recordings.find((item) => item.filename === selectedFilename) ||
+    recordings[0] ||
+    null;
+  const selectedRecordingUrl = selectedRecording
+    ? buildRecordingUrl(selectedRecording)
+    : "";
+  const currentRecordingMode =
+    recordingValues[RECORDING_SAVE_MODE_KEY] || "detection";
+  const currentRecordingFileMode =
+    recordingValues[RECORDING_FILE_MODE_KEY] || "segment";
   const recordingItems = useMemo(() => {
-    const itemByKey = new Map((runtimeConfig?.items || []).map((item) => [item.key, item]));
-    return RECORDING_CONFIG_KEYS.map((key) => itemByKey.get(key)).filter(Boolean);
+    const itemByKey = new Map(
+      (runtimeConfig?.items || []).map((item) => [item.key, item]),
+    );
+    return RECORDING_CONFIG_KEYS.map((key) => itemByKey.get(key)).filter(
+      Boolean,
+    );
   }, [runtimeConfig]);
   const modeItem =
     recordingItems.find((item) => item.key === RECORDING_SAVE_MODE_KEY) || null;
+  const fileModeItem =
+    recordingItems.find((item) => item.key === RECORDING_FILE_MODE_KEY) || null;
+  const segmentItem =
+    recordingItems.find(
+      (item) => item.key === "EDGE_RECORDING_SEGMENT_MINUTES",
+    ) || null;
   const recordingTuningItems = recordingItems.filter(
     (item) =>
-      item.key !== RECORDING_SAVE_MODE_KEY && item.key !== "EDGE_RECORDING_ENABLED",
+      item.key !== RECORDING_SAVE_MODE_KEY &&
+      item.key !== RECORDING_FILE_MODE_KEY &&
+      item.key !== "EDGE_RECORDING_ENABLED",
+  );
+  const visibleRecordingTuningItems = recordingTuningItems.filter(
+    (item) =>
+      currentRecordingFileMode !== "session" ||
+      item.key !== "EDGE_RECORDING_SEGMENT_MINUTES",
   );
   const recordingToggleItem =
-    recordingItems.find((item) => item.key === "EDGE_RECORDING_ENABLED") || null;
+    recordingItems.find((item) => item.key === "EDGE_RECORDING_ENABLED") ||
+    null;
   const changedRecordingValues = useMemo(() => {
     const changed = {};
     for (const key of RECORDING_CONFIG_KEYS) {
@@ -546,23 +599,51 @@ export default function RecordingLibrary() {
     return changed;
   }, [recordingValues, originalRecordingValues]);
   const changedRecordingCount = Object.keys(changedRecordingValues).length;
+  const recordingFlowSummary =
+    currentRecordingFileMode === "session"
+      ? "Satu file penuh per sesi edge"
+      : formatConfigValue(
+          segmentItem,
+          recordingValues.EDGE_RECORDING_SEGMENT_MINUTES || "10",
+        );
+  const recordingArchiveDescription =
+    currentRecordingFileMode === "session"
+      ? "Setiap file berisi satu sesi rekaman penuh sejak recorder edge mulai berjalan. File baru muncul setelah sesi selesai, misalnya saat worker berhenti, sumber diganti, atau sesi di-reset karena gap stream."
+      : `Setiap file berisi segmen rekaman ${recordingValues.EDGE_RECORDING_SEGMENT_MINUTES || 10} menit dan baru muncul setelah segmennya selesai disimpan.`;
+  const recordingEmptyDescription =
+    currentRecordingFileMode === "session"
+      ? "Biarkan edge worker menyelesaikan satu sesi rekam penuh. File akan muncul setelah worker berhenti, sumber berubah, atau recorder mereset sesi karena gap stream."
+      : `Biarkan edge worker berjalan sampai satu segmen ${recordingValues.EDGE_RECORDING_SEGMENT_MINUTES || 10} menit selesai, lalu rekaman akan muncul di halaman ini.`;
   const recordingOverview = [
     {
-      label: "Mode Aktif",
+      label: "Mode Simpan",
       value: formatRecordingMode(currentRecordingMode),
       tone: currentRecordingMode === "raw" ? "warning" : "primary",
     },
     {
-      label: "Rekaman Otomatis",
-      value: isTruthy(recordingValues.EDGE_RECORDING_ENABLED) ? "Aktif" : "Nonaktif",
-      tone: isTruthy(recordingValues.EDGE_RECORDING_ENABLED) ? "success" : "ghost",
+      label: "Mode Record",
+      value: formatRecordingFileMode(currentRecordingFileMode),
+      tone: currentRecordingFileMode === "session" ? "info" : "secondary",
     },
     {
-      label: "Durasi Segmen",
-      value: formatConfigValue(
-        recordingItems.find((item) => item.key === "EDGE_RECORDING_SEGMENT_MINUTES"),
-        recordingValues.EDGE_RECORDING_SEGMENT_MINUTES || "10",
-      ),
+      label: "Rekaman Otomatis",
+      value: isTruthy(recordingValues.EDGE_RECORDING_ENABLED)
+        ? "Aktif"
+        : "Nonaktif",
+      tone: isTruthy(recordingValues.EDGE_RECORDING_ENABLED)
+        ? "success"
+        : "ghost",
+    },
+    {
+      label:
+        currentRecordingFileMode === "session" ? "Pola File" : "Durasi Segmen",
+      value:
+        currentRecordingFileMode === "session"
+          ? recordingFlowSummary
+          : formatConfigValue(
+              segmentItem,
+              recordingValues.EDGE_RECORDING_SEGMENT_MINUTES || "10",
+            ),
       tone: "secondary",
     },
     {
@@ -583,7 +664,10 @@ export default function RecordingLibrary() {
     }
 
     setActiveDateKey((current) => {
-      if (current && recordingGroups.some((group) => group.dateKey === current)) {
+      if (
+        current &&
+        recordingGroups.some((group) => group.dateKey === current)
+      ) {
         return current;
       }
       return recordingGroups[0].dateKey;
@@ -592,14 +676,18 @@ export default function RecordingLibrary() {
 
   useEffect(() => {
     if (!activeDateGroup || activeGroupRecordings.length === 0) return;
-    if (selectedFilename && activeGroupRecordings.some((item) => item.filename === selectedFilename)) {
+    if (
+      selectedFilename &&
+      activeGroupRecordings.some((item) => item.filename === selectedFilename)
+    ) {
       return;
     }
     setSelectedFilename(activeGroupRecordings[0].filename);
   }, [activeDateGroup, activeGroupRecordings, selectedFilename]);
 
   useEffect(() => {
-    if (!selectedRecording || selectedRecording.preview_ready !== false) return undefined;
+    if (!selectedRecording || selectedRecording.preview_ready !== false)
+      return undefined;
 
     const retryTimer = window.setTimeout(() => {
       loadRecordings({ silent: true });
@@ -609,11 +697,15 @@ export default function RecordingLibrary() {
   }, [selectedRecording?.filename, selectedRecording?.preview_ready]);
 
   const summary = useMemo(() => {
-    const totalSizeMb = recordings.reduce((sum, item) => sum + Number(item.size_mb || 0), 0);
+    const totalSizeMb = recordings.reduce(
+      (sum, item) => sum + Number(item.size_mb || 0),
+      0,
+    );
     return {
       totalFiles: recordings.length,
       totalSizeMb,
-      latestRecordedUntil: recordings[0]?.recorded_until || recordings[0]?.uploaded_at || "",
+      latestRecordedUntil:
+        recordings[0]?.recorded_until || recordings[0]?.uploaded_at || "",
     };
   }, [recordings]);
 
@@ -656,10 +748,18 @@ export default function RecordingLibrary() {
   }
 
   async function handleSaveMode(mode) {
-    setSavingMode(mode);
+    setSavingMode(`save:${mode}`);
     await saveRecordingConfig(
       { ...changedRecordingValues, [RECORDING_SAVE_MODE_KEY]: mode },
       `Mode simpan rekaman: ${formatRecordingMode(mode)}.`,
+    );
+  }
+
+  async function handleSaveRecordingFileMode(mode) {
+    setSavingMode(`file:${mode}`);
+    await saveRecordingConfig(
+      { ...changedRecordingValues, [RECORDING_FILE_MODE_KEY]: mode },
+      `Mode record rekaman: ${formatRecordingFileMode(mode)}.`,
     );
   }
 
@@ -687,7 +787,10 @@ export default function RecordingLibrary() {
     setDownloadingDateKey(dateKey);
     try {
       await downloadRecordingArchive(dateKey);
-      showToast("success", `Unduhan arsip tanggal ${formatDateLabel(dateKey)} dimulai.`);
+      showToast(
+        "success",
+        `Unduhan arsip tanggal ${formatDateLabel(dateKey)} dimulai.`,
+      );
     } catch (error) {
       showToast("error", error.message || "Gagal mengunduh arsip per tanggal.");
     } finally {
@@ -718,9 +821,8 @@ export default function RecordingLibrary() {
             </Heading>
             <p className="text-sm leading-6 text-base-content/70">
               Halaman ini khusus untuk melihat arsip rekaman CCTV yang dibuat
-              otomatis dari hasil video yang sudah diproses. Setiap file berisi
-              segmen rekaman 10 menit dan baru muncul setelah segmennya selesai
-              disimpan.
+              otomatis dari hasil video yang sudah diproses.{" "}
+              {recordingArchiveDescription}
             </p>
           </div>
 
@@ -734,7 +836,9 @@ export default function RecordingLibrary() {
               </Badge>
             )}
             <Badge type="secondary" className="px-3 py-3">
-              Auto segment {recordingValues.EDGE_RECORDING_SEGMENT_MINUTES || 10} menit
+              {currentRecordingFileMode === "session"
+                ? "Auto 1 file per sesi edge"
+                : `Auto segment ${recordingValues.EDGE_RECORDING_SEGMENT_MINUTES || 10} menit`}
             </Badge>
             <Button
               variant="primary"
@@ -797,46 +901,25 @@ export default function RecordingLibrary() {
                 </div>
               )}
 
-              <div className="rounded-2xl border border-primary/20 bg-gradient-to-r from-primary/12 via-base-100 to-info/10 p-5">
+              <div className="rounded-md  p-5">
                 <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-base-content/50">
                       Kontrol Rekaman
                     </p>
                     <p className="mt-2 text-xl font-semibold text-base-content">
-                      Atur bagaimana segmen CCTV disimpan dari halaman ini.
+                      Atur bagaimana file CCTV disimpan dari halaman ini.
                     </p>
                     <p className="mt-2 max-w-2xl text-sm leading-6 text-base-content/65">
-                      Ubah mode simpan, durasi segmen, dan parameter encoder tanpa
-                      pindah ke halaman konfigurasi utama.
+                      Ubah mode simpan, pola file rekaman, dan parameter encoder
+                      tanpa pindah ke halaman konfigurasi utama.
                     </p>
-                  </div>
-
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {recordingOverview.map((item) => (
-                      <div
-                        key={item.label}
-                        className="rounded-2xl border border-base-300/80 bg-base-100/85 p-4"
-                      >
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-base-content/45">
-                          {item.label}
-                        </p>
-                        <div className="mt-2 flex items-center justify-between gap-3">
-                          <p className="text-base font-semibold text-base-content">
-                            {item.value}
-                          </p>
-                          <Badge type={item.tone} size="sm">
-                            Live
-                          </Badge>
-                        </div>
-                      </div>
-                    ))}
                   </div>
                 </div>
               </div>
 
               <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-                <div className="space-y-4 rounded-2xl border border-base-300 bg-base-100/70 p-5">
+                <div className="space-y-4 rounded-md  p-5">
                   <div className="space-y-1">
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-base-content/50">
                       Mode Simpan
@@ -853,16 +936,51 @@ export default function RecordingLibrary() {
 
                   <div className="grid gap-3 lg:grid-cols-2">
                     {(modeItem?.options || []).map((option) => (
-                      <RecordingModeOption
+                      <RecordingOptionCard
                         key={option.value}
                         option={option}
                         active={currentRecordingMode === option.value}
                         disabled={configSaving}
-                        loading={savingMode === option.value}
+                        loading={savingMode === `save:${option.value}`}
                         onSelect={handleSaveMode}
+                        description={modeDescription(option.value)}
                       />
                     ))}
                   </div>
+
+                  {fileModeItem && (
+                    <div className="space-y-4  pt-4">
+                      <div className="space-y-1">
+                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-base-content/50">
+                          Mode Record
+                        </p>
+                        <p className="text-lg font-semibold text-base-content">
+                          Pilih pola file rekaman
+                        </p>
+                        {fileModeItem?.hint && (
+                          <p className="max-w-2xl text-sm leading-6 text-base-content/65">
+                            {fileModeItem.hint}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="grid gap-3 lg:grid-cols-2">
+                        {(fileModeItem.options || []).map((option) => (
+                          <RecordingOptionCard
+                            key={option.value}
+                            option={option}
+                            active={currentRecordingFileMode === option.value}
+                            disabled={configSaving}
+                            loading={savingMode === `file:${option.value}`}
+                            onSelect={handleSaveRecordingFileMode}
+                            description={recordingFileModeDescription(
+                              option.value,
+                            )}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {recordingToggleItem && (
                     <RecordingConfigField
@@ -877,22 +995,23 @@ export default function RecordingLibrary() {
                   )}
                 </div>
 
-                <div className="space-y-4 rounded-2xl border border-base-300 bg-base-100/70 p-5">
+                <div className="space-y-4 rounded-md  p-5">
                   <div className="space-y-1">
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-base-content/50">
                       Tuning
                     </p>
                     <p className="text-lg font-semibold text-base-content">
-                      Parameter segmen dan encoder
+                      Parameter rekaman dan encoder
                     </p>
                     <p className="text-sm leading-6 text-base-content/65">
-                      Setiap field menampilkan hint agar perubahan lebih aman dan
-                      mudah dipahami.
+                      {currentRecordingFileMode === "session"
+                        ? "Mode sesi penuh tidak memakai durasi segmen. Field yang tampil di bawah hanya parameter yang masih relevan."
+                        : "Setiap field menampilkan hint agar perubahan lebih aman dan mudah dipahami."}
                     </p>
                   </div>
 
                   <div className="grid gap-4">
-                    {recordingTuningItems.map((item) => (
+                    {visibleRecordingTuningItems.map((item) => (
                       <RecordingConfigField
                         key={item.key}
                         item={item}
@@ -908,10 +1027,15 @@ export default function RecordingLibrary() {
                 </div>
               </div>
 
-              <div className="flex flex-col gap-4 rounded-2xl border border-base-300 bg-base-100/70 p-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex flex-col gap-4 rounded-md  p-4 lg:flex-row lg:items-center lg:justify-between">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge type={changedRecordingCount ? "warning" : "success"} outline>
-                    {changedRecordingCount ? `${changedRecordingCount} perubahan` : "Siap"}
+                  <Badge
+                    type={changedRecordingCount ? "warning" : "success"}
+                    outline
+                  >
+                    {changedRecordingCount
+                      ? `${changedRecordingCount} perubahan`
+                      : "Siap"}
                   </Badge>
                   <Badge type="ghost" outline>
                     Tersimpan di runtime config
@@ -952,19 +1076,18 @@ export default function RecordingLibrary() {
               <span className="loading loading-dots loading-lg"></span>
             </div>
           ) : !selectedRecording ? (
-            <div className="flex min-h-[360px] flex-col items-center justify-center rounded-2xl border border-dashed border-base-300 bg-base-200/40 px-6 text-center">
+            <div className="flex min-h-[360px] flex-col items-center justify-center rounded-md border border-dashed border-base-300 bg-base-200/40 px-6 text-center">
               <p className="text-lg font-semibold">
                 Belum ada rekaman tersedia
               </p>
               <p className="mt-2 max-w-lg text-sm text-base-content/60">
-                Biarkan edge worker berjalan sampai satu segmen 10 menit
-                selesai, lalu rekaman akan muncul di halaman ini.
+                {recordingEmptyDescription}
               </p>
             </div>
           ) : (
             <div className="space-y-4">
               {selectedRecording.preview_ready === false ? (
-                <div className="flex aspect-video w-full flex-col items-center justify-center rounded-2xl border border-base-300 bg-black/70 px-6 text-center text-white">
+                <div className="flex aspect-video w-full flex-col items-center justify-center rounded-md border border-base-300 bg-black/70 px-6 text-center text-white">
                   <p className="text-lg font-semibold">
                     Preview sedang disiapkan
                   </p>
@@ -979,7 +1102,7 @@ export default function RecordingLibrary() {
                   key={selectedRecordingUrl}
                   controls
                   preload="metadata"
-                  className="aspect-video w-full rounded-2xl border border-base-300 bg-black"
+                  className="aspect-video w-full rounded-md border border-base-300 bg-black"
                   onLoadedData={() => setVideoLoadError("")}
                   onError={() =>
                     setVideoLoadError(
@@ -1035,7 +1158,11 @@ export default function RecordingLibrary() {
 
               <div className="flex flex-wrap items-center gap-2">
                 <Badge type="secondary">
-                  Segmen {selectedRecording.segment_minutes || 10} menit
+                  Durasi{" "}
+                  {selectedRecording.duration_minutes ||
+                    selectedRecording.segment_minutes ||
+                    10}{" "}
+                  menit
                 </Badge>
                 {selectedRecording.camera_id && (
                   <Badge type="ghost">
@@ -1056,7 +1183,9 @@ export default function RecordingLibrary() {
                   outline
                   loading={downloadingFilename === selectedRecording.filename}
                   disabled={downloadingDateKey !== ""}
-                  onClick={() => handleDownloadRecording(selectedRecording.filename)}
+                  onClick={() =>
+                    handleDownloadRecording(selectedRecording.filename)
+                  }
                   isSubmit={false}
                 >
                   Unduh Video
@@ -1068,7 +1197,9 @@ export default function RecordingLibrary() {
                     outline
                     loading={downloadingDateKey === activeDateGroup.dateKey}
                     disabled={downloadingFilename !== ""}
-                    onClick={() => handleDownloadDateArchive(activeDateGroup.dateKey)}
+                    onClick={() =>
+                      handleDownloadDateArchive(activeDateGroup.dateKey)
+                    }
                     isSubmit={false}
                   >
                     Unduh Tanggal
@@ -1095,57 +1226,31 @@ export default function RecordingLibrary() {
           )}
         </Section>
 
-        <Section title="Daftar Rekaman" className="mt-0 h-full">
+        <Section title="Daftar Rekaman" className="mt-0 ">
           <div className="space-y-4">
-            <div className="flex flex-col gap-3 rounded-2xl border border-base-300 bg-base-100/70 px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
-                {!isFolderView && (
-              <div className="flex min-w-0 items-center gap-3">
-                {!isFolderView && activeDateGroup && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm btn-square shrink-0"
-                    aria-label="Kembali ke folder tanggal"
-                    onClick={handleBackToFolders}
-                  >
-                    <BackChevronIcon />
-                  </button>
-                )}
-                <div className="min-w-0">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-base-content/45">
-                    {isFolderView ? "Arsip Tanggal" : "Isi Arsip"}
-                  </p>
-                  <p className="mt-1 truncate text-lg font-semibold text-base-content">
-                    {isFolderView
-                      ? "Folder Rekaman"
-                      : activeDateGroup?.dateLabel || "Daftar Rekaman"}
-                  </p>
-                  <p className="mt-1 text-sm text-base-content/65">
-                    {isFolderView
-                      ? "Pilih folder tanggal untuk membuka daftar recording pada hari tersebut."
-                      : "Pilih recording untuk preview, unduh file asli, atau unduh arsip satu tanggal."}
-                  </p>
+            {!isFolderView && (
+              <div className="flex flex-col gap-3 rounded-md  lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex min-w-0 items-center gap-3">
+                  {!isFolderView && activeDateGroup && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm btn-square shrink-0"
+                      aria-label="Kembali ke folder tanggal"
+                      onClick={handleBackToFolders}
+                    >
+                      <BackChevronIcon />
+                    </button>
+                  )}
+                  <div className="min-w-0">
+                    <p className="mt-1 truncate text-lg font-semibold text-base-content">
+                      {isFolderView
+                        ? "Folder Rekaman"
+                        : activeDateGroup?.dateLabel || "Daftar Rekaman"}
+                    </p>
+                  </div>
                 </div>
               </div>
-                )}
-
-              <div className="flex flex-wrap items-center gap-2 text-xs text-base-content/55">
-                {!isFolderView && activeDateGroup ? (
-                  <>
-                    <Badge type="secondary" outline>
-                      {activeGroupRecordings.length} video
-                    </Badge>
-                    <Badge type="ghost" outline>
-                      {formatSize(activeDateGroup.totalSizeMb)}
-                    </Badge>
-                  </>
-                ) : (
-                  <Badge type="ghost" outline>
-                    {recordingGroups.length} folder tanggal
-                  </Badge>
-                )}
-                <span>Sinkron terakhir: {formatDateTime(lastSyncedAt)}</span>
-              </div>
-            </div>
+            )}
 
             {loading ? (
               <div className="flex items-center justify-center py-10">
@@ -1156,25 +1261,26 @@ export default function RecordingLibrary() {
                 Belum ada rekaman CCTV yang bisa ditampilkan.
               </p>
             ) : (
-              <div className="rounded-2xl border border-base-300 bg-base-100/70 p-4">
+              <div className="rounded-md  bg-base-100/70 ">
                 {isFolderView ? (
-                  <div className="space-y-4">
+                  <div className="space-y-4 ">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
                         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-base-content/45">
                           Pilih Folder
                         </p>
                         <p className="mt-1 text-sm text-base-content/70">
-                          Sentuh satu folder tanggal untuk berpindah ke daftar recording di hari itu.
+                          Sentuh satu folder tanggal untuk berpindah ke daftar
+                          recording di hari itu.
                         </p>
                       </div>
                     </div>
 
-                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1 space-y-2 h-full overflow-y-auto overflow-x-clip pr-1 h-[560px]">
                       {recordingGroups.map((group) => (
                         <div
                           key={group.dateKey}
-                          className="rounded-2xl border border-base-300 bg-base-100 p-4 transition hover:border-primary/40 hover:bg-base-100"
+                          className="rounded-md border p-4 transition border-base-300 bg-base-100 hover:border-primary/40"
                         >
                           <button
                             type="button"
@@ -1189,11 +1295,11 @@ export default function RecordingLibrary() {
                                     {group.dateLabel}
                                   </p>
                                 </div>
-                                <div className="mt-2 space-y-1 text-xs text-base-content/60">
-                                  <p>{group.items.length} footage</p>
-                                  <p>{formatSize(group.totalSizeMb)}</p>
+                                <div className=" space-y-1 text-xs text-base-content/60 ">
                                   <p>
-                                    Rekaman terakhir: {formatDateTime(group.latestRecordedUntil)}
+                                    {group.items.length} footage -{" "}
+                                    {formatSize(group.totalSizeMb)} -{" "}
+                                    {formatDateTime(group.latestRecordedUntil)}
                                   </p>
                                 </div>
                               </div>
@@ -1215,7 +1321,9 @@ export default function RecordingLibrary() {
                               outline
                               loading={downloadingDateKey === group.dateKey}
                               disabled={downloadingFilename !== ""}
-                              onClick={() => handleDownloadDateArchive(group.dateKey)}
+                              onClick={() =>
+                                handleDownloadDateArchive(group.dateKey)
+                              }
                               isSubmit={false}
                             >
                               Unduh ZIP
@@ -1227,33 +1335,19 @@ export default function RecordingLibrary() {
                   </div>
                 ) : activeDateGroup ? (
                   <div className="space-y-4">
-                    <div className="flex flex-col gap-3 rounded-2xl border border-base-300 bg-base-100/80 p-4">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-base-content/45">
-                            Arsip Aktif
-                          </p>
-                          <p className="mt-1 text-lg font-semibold text-base-content">
-                            {activeDateGroup.dateLabel}
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Badge type="secondary" outline>
-                            {activeGroupRecordings.length} video
-                          </Badge>
-                          <Badge type="ghost" outline>
-                            {formatSize(activeDateGroup.totalSizeMb)}
-                          </Badge>
-                        </div>
-                      </div>
+                    <div className="flex flex-col gap-3 rounded-md ">
                       <div className="flex flex-wrap items-center gap-2">
                         <Button
                           variant="secondary"
                           size="sm"
                           outline
-                          loading={downloadingDateKey === activeDateGroup.dateKey}
+                          loading={
+                            downloadingDateKey === activeDateGroup.dateKey
+                          }
                           disabled={downloadingFilename !== ""}
-                          onClick={() => handleDownloadDateArchive(activeDateGroup.dateKey)}
+                          onClick={() =>
+                            handleDownloadDateArchive(activeDateGroup.dateKey)
+                          }
                           isSubmit={false}
                         >
                           Unduh Arsip Tanggal
@@ -1268,7 +1362,7 @@ export default function RecordingLibrary() {
                         return (
                           <div
                             key={recording.filename}
-                            className={`rounded-2xl border p-4 transition ${
+                            className={`rounded-md border p-4 transition ${
                               active
                                 ? "border-primary bg-primary/10 shadow-sm"
                                 : "border-base-300 bg-base-100 hover:border-primary/40"
@@ -1290,9 +1384,7 @@ export default function RecordingLibrary() {
                                       <p className="truncate text-sm font-semibold">
                                         {recording.filename}
                                       </p>
-                                      <Badge type="secondary" size="sm">
-                                        Rekaman Otomatis
-                                      </Badge>
+
                                       {recording.preview_ready === false && (
                                         <Badge type="warning" size="sm">
                                           Menyiapkan Preview
@@ -1305,16 +1397,31 @@ export default function RecordingLibrary() {
                                       )}
                                     </div>
                                     <div className="mt-2 grid gap-1 text-xs text-base-content/60 sm:grid-cols-2">
-                                      <p>Mulai: {formatDateTime(recording.recorded_from)}</p>
-                                      <p>Selesai: {formatDateTime(recording.recorded_until)}</p>
-                                      <p>Ukuran: {formatSize(recording.size_mb)}</p>
-                                      <p>Kamera: {recording.camera_id || "-"}</p>
+                                      <p>
+                                        {formatClockTime(
+                                          recording.recorded_from,
+                                        )}{" "}
+                                        -{" "}
+                                        {formatClockTime(
+                                          recording.recorded_until,
+                                        )}
+                                      </p>
+
+                                      <p>
+                                        Ukuran: {formatSize(recording.size_mb)}
+                                      </p>
                                     </div>
                                   </div>
                                 </div>
                               </button>
 
-                              <div className="flex flex-wrap items-center gap-2">
+                              <div
+                                className="flex flex-wrap items-center gap-2"
+                                onClick={() => {
+                                  setVideoLoadError("");
+                                  setSelectedFilename(recording.filename);
+                                }}
+                              >
                                 <Button
                                   variant="primary"
                                   size="xs"
@@ -1330,9 +1437,13 @@ export default function RecordingLibrary() {
                                   variant="secondary"
                                   size="xs"
                                   outline
-                                  loading={downloadingFilename === recording.filename}
+                                  loading={
+                                    downloadingFilename === recording.filename
+                                  }
                                   disabled={downloadingDateKey !== ""}
-                                  onClick={() => handleDownloadRecording(recording.filename)}
+                                  onClick={() =>
+                                    handleDownloadRecording(recording.filename)
+                                  }
                                   isSubmit={false}
                                 >
                                   Unduh
@@ -1342,12 +1453,16 @@ export default function RecordingLibrary() {
                                     variant="error"
                                     size="xs"
                                     outline
-                                    loading={deletingFilename === recording.filename}
+                                    loading={
+                                      deletingFilename === recording.filename
+                                    }
                                     disabled={
                                       deletingFilename !== "" &&
                                       deletingFilename !== recording.filename
                                     }
-                                    onClick={() => handleDelete(recording.filename)}
+                                    onClick={() =>
+                                      handleDelete(recording.filename)
+                                    }
                                     isSubmit={false}
                                   >
                                     Hapus

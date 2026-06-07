@@ -214,6 +214,8 @@ _processed_clients = 0
 _raw_clients = 0
 _webrtc_viewers = 0
 _peer_connections: set = set()
+_stream_status = "waiting"
+_stream_status_detail = ""
 
 
 def _webrtc_disabled_reason() -> str:
@@ -491,14 +493,17 @@ def health():
     """Health check endpoint for frontend stream negotiation."""
     with frame_condition:
         has_frame = latest_frame is not None
+        status = "ok" if has_frame else _stream_status
         age_ms = int(max(0.0, time.time() - _last_frame_time) * 1000) if has_frame else None
         frame_count = _frame_count
         mjpeg_processed_clients = _processed_clients
         mjpeg_raw_clients = _raw_clients
         frame_shape = list(latest_frame.shape[:2]) if latest_frame is not None else None
+        status_detail = _stream_status_detail or None
 
     return {
-        "status": "ok" if has_frame else "waiting",
+        "status": status,
+        "status_detail": status_detail,
         "camera_source": TEST_INPUT or EDGE_STREAM_URL or "not configured",
         "has_frame": has_frame,
         "frame_age_ms": age_ms,
@@ -608,7 +613,7 @@ def update_latest_frame(frame, raw_frame=None):
     import cv2
 
     global latest_frame, latest_frame_raw, _latest_jpeg, _latest_jpeg_raw
-    global _frame_count, _last_frame_time, _frame_version
+    global _frame_count, _last_frame_time, _frame_version, _stream_status, _stream_status_detail
 
     encode_params = [cv2.IMWRITE_JPEG_QUALITY, EDGE_STREAM_JPEG_QUALITY]
     with frame_condition:
@@ -638,6 +643,8 @@ def update_latest_frame(frame, raw_frame=None):
         _last_frame_time = time.time()
         _frame_timestamps.append(_last_frame_time)
         _frame_version += 1
+        _stream_status = "ok"
+        _stream_status_detail = ""
         frame_condition.notify_all()
 
 
@@ -645,3 +652,22 @@ def has_raw_stream_clients() -> bool:
     """Return whether the raw MJPEG feed currently has any connected clients."""
     with frame_condition:
         return _raw_clients > 0
+
+
+def clear_latest_frame(*, status: str = "waiting", detail: str = "") -> None:
+    """Clear the shared frame buffers and publish a worker stream state."""
+    global latest_frame, latest_frame_raw, _latest_jpeg, _latest_jpeg_raw
+    global _last_frame_time, _frame_version, _stream_status, _stream_status_detail
+
+    next_status = status if status in {"ok", "waiting", "stopped", "error"} else "waiting"
+    with frame_condition:
+        latest_frame = None
+        latest_frame_raw = None
+        _latest_jpeg = None
+        _latest_jpeg_raw = None
+        _last_frame_time = 0.0
+        _frame_timestamps.clear()
+        _frame_version += 1
+        _stream_status = next_status
+        _stream_status_detail = (detail or "").strip()
+        frame_condition.notify_all()

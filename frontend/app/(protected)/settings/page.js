@@ -14,9 +14,58 @@ import Card from "@/components/ui/Card";
 import Heading from "@/components/ui/Heading";
 
 const SETTINGS_HIDDEN_GROUP_IDS = new Set(["recording"]);
+const RUNTIME_PROFILE_KEYS = [
+  "EDGE_CONFIG_REFRESH_SECONDS",
+  "EDGE_PROCESSING_MAX_FPS",
+  "EDGE_STREAM_MAX_FPS",
+  "EDGE_STREAM_JPEG_QUALITY",
+  "EDGE_FILE_FRAME_STEP",
+  "EDGE_LOCAL_FILE_STOP_ON_END",
+  "EDGE_LOCAL_FILE_REPLAY_POST_EVENTS",
+];
+const RUNTIME_PROFILES = [
+  {
+    id: "local-video",
+    label: "Video Lokal",
+    badgeType: "warning",
+    description:
+      "Lebih teliti untuk replay file lokal: proses frame lebih rapat, preview tetap ringan, dan playback berhenti saat file selesai.",
+    values: {
+      EDGE_CONFIG_REFRESH_SECONDS: "5",
+      EDGE_PROCESSING_MAX_FPS: "0",
+      EDGE_STREAM_MAX_FPS: "10",
+      EDGE_STREAM_JPEG_QUALITY: "70",
+      EDGE_FILE_FRAME_STEP: "1",
+      EDGE_LOCAL_FILE_STOP_ON_END: "true",
+      EDGE_LOCAL_FILE_REPLAY_POST_EVENTS: "false",
+    },
+  },
+  {
+    id: "realtime",
+    label: "Realtime",
+    badgeType: "success",
+    description:
+      "Lebih ringan untuk live stream: FPS worker dan preview dibatasi agar stabil, sambil menjaga reload config tetap responsif.",
+    values: {
+      EDGE_CONFIG_REFRESH_SECONDS: "15",
+      EDGE_PROCESSING_MAX_FPS: "12",
+      EDGE_STREAM_MAX_FPS: "15",
+      EDGE_STREAM_JPEG_QUALITY: "55",
+      EDGE_FILE_FRAME_STEP: "3",
+      EDGE_LOCAL_FILE_STOP_ON_END: "false",
+      EDGE_LOCAL_FILE_REPLAY_POST_EVENTS: "false",
+    },
+  },
+];
 
 function isTruthy(value) {
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
+}
+
+function matchesRuntimeProfile(values, profileValues) {
+  return RUNTIME_PROFILE_KEYS.every(
+    (key) => String(values?.[key] ?? "") === String(profileValues?.[key] ?? ""),
+  );
 }
 
 function groupItems(items) {
@@ -226,10 +275,24 @@ export default function SettingsPage() {
   const hasRestartChange = visibleItems.some(
     (item) => item.restart_required && Object.prototype.hasOwnProperty.call(changedValues, item.key),
   );
+  const activeRuntimeProfile = useMemo(
+    () => RUNTIME_PROFILES.find((profile) => matchesRuntimeProfile(values, profile.values)) || null,
+    [values],
+  );
 
   function handleChange(key, value) {
     setValues((current) => ({ ...current, [key]: value }));
     setSaveResult(null);
+  }
+
+  function handleApplyRuntimeProfile(profileId) {
+    const profile = RUNTIME_PROFILES.find((candidate) => candidate.id === profileId);
+    if (!profile) return;
+
+    setValues((current) => ({ ...current, ...profile.values }));
+    setActiveGroup("stream");
+    setSaveResult(null);
+    showToast("info", `Mode ${profile.label} diterapkan. Klik Simpan untuk menyimpan preset ini.`);
   }
 
   async function handleSubmit(event) {
@@ -287,6 +350,36 @@ export default function SettingsPage() {
           >
             Muat Ulang
           </Button>
+          <div className="flex items-center gap-2 rounded-md  shadow-sm">
+            
+            <div
+              className="join"
+              role="group"
+              aria-label="Preset konfigurasi runtime untuk video lokal atau realtime"
+            >
+              {RUNTIME_PROFILES.map((profile) => {
+                const isActive = activeRuntimeProfile?.id === profile.id;
+
+                return (
+                  <button
+                    key={profile.id}
+                    type="button"
+                    className={[
+                      "join-item btn btn-sm min-w-[8.5rem]",
+                      isActive ? "btn-primary" : "btn-ghost border-base-300/70",
+                    ].join(" ")}
+                    onClick={() => handleApplyRuntimeProfile(profile.id)}
+                    disabled={loading || saving}
+                    title={profile.description}
+                    aria-pressed={isActive}
+                  >
+                    {profile.label}
+                  </button>
+                );
+              })}
+            </div>
+           
+          </div>
           <Button
             size="sm"
             isSubmit={false}
@@ -300,6 +393,7 @@ export default function SettingsPage() {
       </div>
 
       {error && <Alert type="error" className="mb-4">{error}</Alert>}
+     
       {hasRestartChange && (
         <Alert type="warning" className="mb-4">
           Ada perubahan yang aktif setelah service terkait di-restart.
