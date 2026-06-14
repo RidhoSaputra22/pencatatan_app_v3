@@ -521,6 +521,7 @@ export default function VisitsPage() {
         uniqueVisitors={uniqueVisitors}
         totalIn={totalIn}
         totalOut={totalOut}
+        hiddenKeys={["totalEvents"]}
       />
 
       {/* Tab switch */}
