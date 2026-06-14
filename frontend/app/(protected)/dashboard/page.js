@@ -32,6 +32,7 @@ export default function DashboardPage() {
     uniqueVisitors,
     totalIn,
     totalOut,
+    currentInside,
     changePercents,
     insights,
     lastUpdatedAt,
@@ -271,8 +272,9 @@ export default function DashboardPage() {
         uniqueVisitors={uniqueVisitors}
         totalIn={totalIn}
         totalOut={totalOut}
+        currentInside={currentInside}
         changePercents={changePercents}
-        hiddenKeys={["totalEvents"]}
+        hiddenKeys={isToday ? ["totalEvents"] : ["totalEvents", "currentInside"]}
       />
 
     

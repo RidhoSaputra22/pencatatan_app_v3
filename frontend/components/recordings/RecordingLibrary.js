@@ -418,6 +418,8 @@ export default function RecordingLibrary() {
   const [downloadingDateKey, setDownloadingDateKey] = useState("");
   const [lastSyncedAt, setLastSyncedAt] = useState("");
   const [videoLoadError, setVideoLoadError] = useState("");
+  const [videoIsLoading, setVideoIsLoading] = useState(false);
+  const [videoHasLoaded, setVideoHasLoaded] = useState(false);
   const [runtimeConfig, setRuntimeConfig] = useState(null);
   const [recordingValues, setRecordingValues] = useState({});
   const [originalRecordingValues, setOriginalRecordingValues] = useState({});
@@ -704,6 +706,19 @@ export default function RecordingLibrary() {
 
     return () => window.clearTimeout(retryTimer);
   }, [selectedRecording?.filename, selectedRecording?.preview_ready]);
+
+  useEffect(() => {
+    if (!selectedRecordingUrl) {
+      setVideoIsLoading(false);
+      setVideoHasLoaded(false);
+      setVideoLoadError("");
+      return;
+    }
+
+    setVideoIsLoading(true);
+    setVideoHasLoaded(false);
+    setVideoLoadError("");
+  }, [selectedRecordingUrl]);
 
   const summary = useMemo(() => {
     const totalSizeMb = recordings.reduce(
@@ -1095,34 +1110,51 @@ export default function RecordingLibrary() {
             </div>
           ) : (
             <div className="space-y-4">
-              {selectedRecording.preview_ready === false ? (
-                <div className="flex aspect-video w-full flex-col items-center justify-center rounded-md border border-base-300 bg-black/70 px-6 text-center text-white">
-                  <p className="text-lg font-semibold">
-                    Preview sedang disiapkan
-                  </p>
-                  <p className="mt-2 max-w-lg text-sm text-white/70">
-                    Rekaman ini masih dikonversi ke format yang kompatibel
-                    dengan browser. Halaman akan mencoba memuat ulang otomatis
-                    beberapa detik lagi.
-                  </p>
-                </div>
-              ) : (
+              <div className="relative">
                 <video
                   key={selectedRecordingUrl}
                   controls
                   preload="metadata"
                   className="aspect-video w-full rounded-md border border-base-300 bg-black"
-                  onLoadedData={() => setVideoLoadError("")}
-                  onError={() =>
+                  onLoadStart={() => {
+                    setVideoIsLoading(true);
+                    setVideoHasLoaded(false);
+                    setVideoLoadError("");
+                  }}
+                  onLoadedData={() => {
+                    setVideoIsLoading(false);
+                    setVideoHasLoaded(true);
+                    setVideoLoadError("");
+                  }}
+                  onError={() => {
+                    setVideoIsLoading(false);
+                    setVideoHasLoaded(false);
                     setVideoLoadError(
-                      "Video belum bisa diputar. Silakan muat ulang beberapa detik lagi atau buka file langsung.",
-                    )
-                  }
+                      selectedRecording.preview_ready === false
+                        ? "Preview belum berhasil dimuat. Silakan tunggu beberapa detik lagi atau buka file langsung."
+                        : "Video belum bisa diputar. Silakan muat ulang beberapa detik lagi atau buka file langsung.",
+                    );
+                  }}
                 >
                   <source src={selectedRecordingUrl} type="video/mp4" />
                   Browser ini tidak mendukung pemutaran video.
                 </video>
-              )}
+                {!videoHasLoaded && !videoLoadError && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center rounded-md border border-base-300 bg-black/75 px-6 text-center text-white">
+                    <span className="loading loading-spinner loading-lg" />
+                    <p className="mt-4 text-lg font-semibold">
+                      {selectedRecording.preview_ready === false
+                        ? "Preview sedang disiapkan"
+                        : "Memuat preview video"}
+                    </p>
+                    <p className="mt-2 max-w-lg text-sm text-white/70">
+                      {selectedRecording.preview_ready === false
+                        ? "Browser akan menunggu sampai backend selesai menyiapkan versi video yang kompatibel, lalu preview diputar otomatis."
+                        : "Mohon tunggu sebentar, rekaman sedang dimuat ke browser."}
+                    </p>
+                  </div>
+                )}
+              </div>
 
               {videoLoadError && (
                 <div className="rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning-content">

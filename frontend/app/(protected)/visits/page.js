@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { useAuth } from "@/context/AuthContext";
-import { fetchEvents, fetchVisitorDaily } from "@/services/stats.service";
+import { fetchCurrentVisitorHistory, fetchEvents, fetchVisitorDaily } from "@/services/stats.service";
 import { todayISO } from "@/lib/utils";
 import Table from "@/components/ui/Table";
 import Section from "@/components/ui/Section";
@@ -107,9 +107,10 @@ export default function VisitsPage() {
   );
   const [events, setEvents] = useState([]);
   const [visitors, setVisitors] = useState([]);
+  const [currentPresenceRows, setCurrentPresenceRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState("events"); // "events" | "visitors"
+  const [tab, setTab] = useState("events"); // "events" | "visitors" | "current"
   const [eventSearch, setEventSearch] = useState("");
   const [eventTypeFilter, setEventTypeFilter] = useState("ALL");
   const [eventDirectionFilter, setEventDirectionFilter] = useState("ALL");
@@ -117,6 +118,8 @@ export default function VisitsPage() {
   const [visitorSearch, setVisitorSearch] = useState("");
   const [visitorNotesFilter, setVisitorNotesFilter] = useState("ALL");
   const [visitorDateFilter, setVisitorDateFilter] = useState("ALL");
+  const [currentSearch, setCurrentSearch] = useState("");
+  const [currentCameraFilter, setCurrentCameraFilter] = useState("ALL");
   const yearOptions = useMemo(() => {
     const currentYearNumber = Number(currentYear);
     return Array.from(
@@ -144,7 +147,7 @@ export default function VisitsPage() {
     setLoading(true);
     setError("");
     try {
-      const [eventsData, visitorsData] = await Promise.all([
+      const [eventsData, visitorsData, currentHistoryData] = await Promise.all([
         fetchEvents(period.fromDate, period.toDate, {
           fromDateTime: period.fromDateTime,
           toDateTime: period.toDateTime,
@@ -153,9 +156,15 @@ export default function VisitsPage() {
           fromDateTime: period.fromDateTime,
           toDateTime: period.toDateTime,
         }).catch(() => []),
+        fetchCurrentVisitorHistory(period.fromDate, period.toDate, {
+          fromDateTime: period.fromDateTime,
+          toDateTime: period.toDateTime,
+          limit: 2000,
+        }).catch(() => []),
       ]);
       setEvents(eventsData);
       setVisitors(visitorsData);
+      setCurrentPresenceRows(currentHistoryData);
     } catch (e) {
       setError(e.message || "Gagal memuat data");
     } finally {
@@ -312,6 +321,53 @@ export default function VisitsPage() {
     v.notes || "-",
   ]);
 
+  const currentVisitorColumns = [
+    "Menit Snapshot",
+    "Visitor Key",
+    "Camera",
+    "Area",
+    "Track ID",
+    "Masuk Sejak",
+    "Durasi Saat Itu",
+  ];
+  const currentCameraOptions = [
+    { value: "ALL", label: "Semua Kamera" },
+    ...Array.from(new Set(currentPresenceRows.map((visitor) => String(visitor.camera_id))))
+      .sort((a, b) => Number(a) - Number(b))
+      .map((cameraId) => ({
+        value: cameraId,
+        label: `Camera ${cameraId}`,
+      })),
+  ];
+  const normalizedCurrentSearch = currentSearch.trim().toLowerCase();
+  const filteredCurrentVisitors = currentPresenceRows.filter((visitor) => {
+    const matchesSearch =
+      !normalizedCurrentSearch ||
+      String(visitor.presence_id).toLowerCase().includes(normalizedCurrentSearch) ||
+      String(visitor.snapshot_minute || "").toLowerCase().includes(normalizedCurrentSearch) ||
+      String(visitor.visitor_key || "").toLowerCase().includes(normalizedCurrentSearch) ||
+      String(visitor.track_id || "").toLowerCase().includes(normalizedCurrentSearch) ||
+      String(visitor.camera_id || "").toLowerCase().includes(normalizedCurrentSearch) ||
+      String(visitor.area_id || "").toLowerCase().includes(normalizedCurrentSearch);
+
+    const matchesCamera =
+      currentCameraFilter === "ALL" ||
+      String(visitor.camera_id) === currentCameraFilter;
+
+    return matchesSearch && matchesCamera;
+  });
+  const currentVisitorRows = filteredCurrentVisitors.map((visitor) => [
+    new Date(visitor.snapshot_minute).toLocaleString("id-ID"),
+    <span key="vk" className="font-mono text-xs">
+      {visitor.visitor_key?.substring(0, 16)}...
+    </span>,
+    visitor.camera_id,
+    visitor.area_id,
+    visitor.track_id || "-",
+    new Date(visitor.entered_at).toLocaleString("id-ID"),
+    `${visitor.duration_minutes} menit`,
+  ]);
+
   // Calculate stats for StatsGrid
   const day = appliedPeriod.displayLabel;
   const customerEvents = events.filter((e) => e.person_type !== "EMPLOYEE");
@@ -320,6 +376,8 @@ export default function VisitsPage() {
   const totalIn = uniqueVisitors;
   const totalOut = customerEvents.filter((e) => e.direction === "OUT").length;
   const totalEvents = totalIn + totalOut;
+  const currentInside = new Set(currentPresenceRows.map((visitor) => visitor.visitor_key)).size;
+  const currentPresenceCount = currentPresenceRows.length;
 
   function resetEventFilters() {
     setEventSearch("");
@@ -332,6 +390,11 @@ export default function VisitsPage() {
     setVisitorSearch("");
     setVisitorNotesFilter("ALL");
     setVisitorDateFilter("ALL");
+  }
+
+  function resetCurrentFilters() {
+    setCurrentSearch("");
+    setCurrentCameraFilter("ALL");
   }
 
   function handleFromTimeChange(value) {
@@ -396,7 +459,7 @@ export default function VisitsPage() {
       <div>
         <Heading level={1}>Data Kunjungan</Heading>
         <Paragraph>
-          Lihat dan kelola data event kunjungan dan pengunjung unik berdasarkan periode.
+          Lihat data event kunjungan, pengunjung unik, serta histori snapshot per menit untuk pengunjung yang berada di dalam ruangan.
         </Paragraph>
       </div>
 
@@ -521,7 +584,7 @@ export default function VisitsPage() {
         uniqueVisitors={uniqueVisitors}
         totalIn={totalIn}
         totalOut={totalOut}
-        hiddenKeys={["totalEvents"]}
+        hiddenKeys={["totalEvents", "uniqueVisitors", "currentInside"]}
       />
 
       {/* Tab switch */}
@@ -537,6 +600,12 @@ export default function VisitsPage() {
           onClick={() => setTab("visitors")}
         >
           Pengunjung Unik ({visitors.length})
+        </button>
+        <button
+          className={`tab ${tab === "current" ? "tab-active" : ""}`}
+          onClick={() => setTab("current")}
+        >
+          Di Dalam Ruangan ({currentInside})
         </button>
       </div>
 
@@ -630,6 +699,48 @@ export default function VisitsPage() {
               columns={visitorColumns}
               rows={visitorRows}
               emptyText="Belum ada data pengunjung unik pada periode ini."
+            />
+          </div>
+        </Section>
+      )}
+
+      {tab === "current" && (
+        <Section title={`Histori Pengunjung Di Dalam Ruangan (${appliedPeriod.displayLabel})`}>
+          <Alert type="info" className="mt-5">
+            Data pada tab ini diambil dari snapshot database per menit dan mengikuti filter periode di atas. Visitor unik: {currentInside}. Total baris snapshot: {currentPresenceCount}.
+          </Alert>
+
+          <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <Input
+              label="Cari Snapshot Visitor"
+              value={currentSearch}
+              onChange={(e) => setCurrentSearch(e.target.value)}
+              placeholder="Waktu, visitor key, track, kamera, area"
+            />
+            <Select
+              label="Kamera"
+              options={currentCameraOptions}
+              value={currentCameraFilter}
+              onChange={(e) => setCurrentCameraFilter(e.target.value)}
+            />
+            <div className="flex items-end">
+              <Button
+                variant="neutral"
+                outline
+                isSubmit={false}
+                onClick={resetCurrentFilters}
+                className="w-full xl:w-fit"
+              >
+                Reset Filter
+              </Button>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <Table
+              columns={currentVisitorColumns}
+              rows={currentVisitorRows}
+              emptyText="Belum ada snapshot pengunjung di dalam ruangan pada periode ini."
             />
           </div>
         </Section>

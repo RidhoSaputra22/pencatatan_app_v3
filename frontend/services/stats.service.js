@@ -82,6 +82,48 @@ export function fetchVisitorDaily(fromDate, toDate, options = {}) {
 }
 
 /**
+ * GET /api/visitors/current — visitors currently inside the room.
+ */
+export function fetchCurrentVisitors(options = {}) {
+  const params = new URLSearchParams();
+
+  if (options.cameraId) {
+    params.set("camera_id", String(options.cameraId));
+  }
+  if (options.limit) {
+    params.set("limit", String(options.limit));
+  }
+
+  const query = params.toString();
+  return get(query ? `/api/visitors/current?${query}` : "/api/visitors/current");
+}
+
+/**
+ * GET /api/visitors/current-history — snapshot histori pengunjung di dalam ruangan per menit.
+ */
+export function fetchCurrentVisitorHistory(fromDate, toDate, options = {}) {
+  const params = new URLSearchParams();
+
+  if (fromDate) params.set("from_date", fromDate);
+  if (toDate) params.set("to_date", toDate);
+  if (options.fromDateTime) {
+    params.set("from_datetime", options.fromDateTime);
+  }
+  if (options.toDateTime) {
+    params.set("to_datetime", options.toDateTime);
+  }
+  if (options.cameraId) {
+    params.set("camera_id", String(options.cameraId));
+  }
+  if (options.limit) {
+    params.set("limit", String(options.limit));
+  }
+
+  const query = params.toString();
+  return get(query ? `/api/visitors/current-history?${query}` : "/api/visitors/current-history");
+}
+
+/**
  * POST /api/admin/reset-db — reset visitor data (admin only).
  */
 export function resetDatabase() {

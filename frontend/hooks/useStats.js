@@ -186,6 +186,7 @@ export function useStats() {
           unique_visitors: normalizedDailyData.reduce((s, r) => s + r.unique_visitors, 0),
           total_in: normalizedDailyData.reduce((s, r) => s + r.total_in, 0),
           total_out: normalizedDailyData.reduce((s, r) => s + r.total_out, 0),
+          current_inside: 0,
         });
         setPerSecond([]);
       }
@@ -213,6 +214,7 @@ export function useStats() {
   const uniqueVisitors = summary?.unique_visitors ?? daily.reduce((s, r) => s + r.unique_visitors, 0);
   const totalIn = summary?.total_in ?? daily.reduce((s, r) => s + r.total_in, 0);
   const totalOut = summary?.total_out ?? daily.reduce((s, r) => s + r.total_out, 0);
+  const currentInside = summary?.current_inside ?? 0;
 
   // Yesterday values for comparison
   const yTotalEvents = yesterdaySummary?.total_events || 0;
@@ -230,6 +232,7 @@ export function useStats() {
     uniqueVisitors: calcChange(uniqueVisitors, yUniqueVisitors),
     totalIn: calcChange(totalIn, yTotalIn),
     totalOut: calcChange(totalOut, yTotalOut),
+    currentInside: null,
   };
 
   // Hourly aggregation from per-second data
@@ -260,6 +263,7 @@ export function useStats() {
     uniqueVisitors,
     totalIn,
     totalOut,
+    currentInside,
     changePercents,
     insights,
     lastUpdatedAt,

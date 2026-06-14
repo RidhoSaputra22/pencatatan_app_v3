@@ -134,3 +134,20 @@ def send_visitor_event(payload: Dict[str, Any], token: Optional[str]) -> Dict[st
             return {"success": False, "error": r.text, "status_code": r.status_code}
     except Exception as e:
         return {"success": False, "error": str(e), "status_code": 0}
+
+
+def send_current_presence(payload: Dict[str, Any], token: Optional[str]) -> Dict[str, Any]:
+    """Send live current-presence snapshot to backend."""
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    try:
+        r = requests.post(
+            f"{BACKEND_URL}/api/presence/live",
+            json=payload,
+            headers=headers,
+            timeout=10,
+        )
+        if r.status_code == 200:
+            return {"success": True, "data": r.json(), "status_code": r.status_code}
+        return {"success": False, "error": r.text, "status_code": r.status_code}
+    except Exception as e:
+        return {"success": False, "error": str(e), "status_code": 0}

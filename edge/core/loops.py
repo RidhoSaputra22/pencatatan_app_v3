@@ -13,6 +13,7 @@ from .api_client import (
     get_employee_registry,
     get_runtime_config,
     login_token,
+    send_current_presence,
     send_visitor_event,
 )
 from . import capture as capture_module
@@ -46,6 +47,7 @@ from .config import (
     FORCE_CENTROID,
     IDENTITY_MODE,
     IMG_SIZE,
+    POST_INTERVAL,
     TEST_FRAME_HEIGHT,
     TEST_FRAME_STEP,
     TEST_FRAME_WIDTH,
@@ -100,6 +102,7 @@ from .visualization import draw_bounding_boxes, draw_exit_gate, draw_info_overla
 log = get_logger("loops")
 
 EVENT_COOLDOWN = TRACK_EVENT_COOLDOWN_SECONDS
+PRESENCE_SYNC_INTERVAL = max(1, POST_INTERVAL)
 REFERENCE_FRAME_SIZE = (TEST_FRAME_WIDTH, TEST_FRAME_HEIGHT)
 _TRACKER_REBUILD_KEYS = {
     "TRACKER_METHOD",
@@ -658,6 +661,32 @@ def _send_track_event(
         "confidence_avg": round(avg_confidence, 4),
     }
     return send_visitor_event(payload, token)
+
+
+def _send_current_presence_snapshot(
+    *,
+    observed_at: datetime,
+    area_id: Optional[int],
+    visitors: List[Dict[str, Any]],
+    token: Optional[str],
+) -> Dict[str, Any]:
+    payload = {
+        "camera_id": CAMERA_ID,
+        "observed_at": observed_at.isoformat(),
+        "visitors": [
+            {
+                "visitor_key": visitor["visitor_key"],
+                "area_id": visitor.get("area_id") or area_id,
+                "track_id": visitor.get("track_id"),
+                "person_type": visitor.get("person_type", "CUSTOMER"),
+                "first_seen_at": visitor.get("first_seen_at"),
+                "last_seen_at": visitor.get("last_seen_at"),
+            }
+            for visitor in visitors
+            if visitor.get("visitor_key")
+        ],
+    }
+    return send_current_presence(payload, token)
 
 
 def _track_counting_point(track) -> Tuple[float, float]:
@@ -1427,6 +1456,7 @@ def real_loop():
     track_identity_aliases: Dict[int, str] = {}
     current_date = ""
     last_event_time: Dict[str, float] = {}
+    last_presence_sync_ts = 0.0
     cap = None
     cap_source = ""
     cap_started_ts = 0.0
@@ -1743,6 +1773,7 @@ def real_loop():
             customer_tracks = 0
             employee_tracks = 0
             verifying_tracks = 0
+            active_presence_by_key: Dict[str, Dict[str, Any]] = {}
 
             for flow in visitor_flow_states.values():
                 if (
@@ -2054,6 +2085,13 @@ def real_loop():
                         if old_flow.get("inside"):
                             visitor_flow_states.setdefault(visitor_key, {}).update(old_flow)
 
+                    presence_started_at = state.get("presence_started_at")
+                    if in_roi_now and classification.get("person_type") not in {"EMPLOYEE", "UNKNOWN"} and visitor_key:
+                        if not isinstance(presence_started_at, datetime):
+                            presence_started_at = now_time
+                    else:
+                        presence_started_at = None
+
                     state.update(
                         {
                             "visitor_key": visitor_key,
@@ -2071,6 +2109,7 @@ def real_loop():
                             "last_seen_ts": now_ts,
                             "last_in_roi": in_roi_now,
                             "missing_frames": 0,
+                            "presence_started_at": presence_started_at,
                         }
                     )
                     state["seen_frames"] = int(state.get("seen_frames", 0)) + 1
@@ -2131,6 +2170,34 @@ def real_loop():
                         flow["active_track_id"] = track_id
                     else:
                         flow = {"inside": False}
+
+                    if (
+                        in_roi_now
+                        and classification.get("person_type") not in {"EMPLOYEE", "UNKNOWN"}
+                        and visitor_key
+                    ):
+                        existing_presence = active_presence_by_key.get(visitor_key)
+                        current_presence = {
+                            "visitor_key": visitor_key,
+                            "area_id": area_id,
+                            "track_id": f"t{track_id}",
+                            "person_type": classification.get("person_type", "CUSTOMER"),
+                            "first_seen_at": (
+                                presence_started_at.isoformat()
+                                if isinstance(presence_started_at, datetime)
+                                else now_time.isoformat()
+                            ),
+                            "last_seen_at": now_time.isoformat(),
+                        }
+                        if not existing_presence:
+                            active_presence_by_key[visitor_key] = current_presence
+                        else:
+                            existing_presence["track_id"] = current_presence["track_id"]
+                            existing_presence["last_seen_at"] = current_presence["last_seen_at"]
+                            existing_presence["first_seen_at"] = min(
+                                str(existing_presence.get("first_seen_at") or current_presence["first_seen_at"]),
+                                current_presence["first_seen_at"],
+                            )
 
                     ready_to_count = (
                         classification.get("person_type") != "UNKNOWN"
@@ -2277,6 +2344,21 @@ def real_loop():
                 _remember_recent_lost_track(recent_lost_tracks, lost_track_id, state, now_ts)
                 track_identity_aliases.pop(lost_track_id, None)
                 del visitor_states[lost_track_id]
+
+            if now_ts - last_presence_sync_ts >= PRESENCE_SYNC_INTERVAL:
+                presence_result = _send_current_presence_snapshot(
+                    observed_at=now_time,
+                    area_id=area_id,
+                    visitors=list(active_presence_by_key.values()),
+                    token=token,
+                )
+                if presence_result.get("success"):
+                    last_presence_sync_ts = now_ts
+                else:
+                    log.warning(
+                        "Failed to send live presence snapshot: %s",
+                        presence_result.get("error", "Unknown"),
+                    )
 
             draw_roi_polygon(display_frame, roi)
             draw_exit_gate(display_frame, _exit_gate_y(roi, frame_h))

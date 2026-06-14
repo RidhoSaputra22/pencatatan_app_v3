@@ -1,6 +1,7 @@
 """
 Database Models sesuai Project Concept
-- roles, users, cameras, counting_areas, visitor_daily, visit_events, daily_stats
+- roles, users, cameras, counting_areas, visitor_daily, visit_events,
+- current_visitors, visitor_minute_presence, daily_stats
 """
 from typing import Optional, List, Any
 from datetime import datetime, date
@@ -111,6 +112,44 @@ class VisitEvent(SQLModel, table=True):
     confidence_avg: Optional[float] = Field(default=None)
     snapshot_path: Optional[str] = Field(default=None, sa_column=Column(Text))
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class CurrentVisitor(SQLModel, table=True):
+    """
+    Tabel current_visitors untuk daftar pengunjung yang saat ini
+    masih berada di dalam ruangan.
+    """
+    __tablename__ = "current_visitors"
+    __table_args__ = (UniqueConstraint("visitor_key", name="uq_current_visitor_key"),)
+
+    current_visitor_id: Optional[int] = Field(default=None, primary_key=True)
+    visitor_key: str = Field(max_length=100, index=True)
+    camera_id: int = Field(foreign_key="cameras.camera_id", index=True)
+    area_id: int = Field(foreign_key="counting_areas.area_id", index=True)
+    track_id: Optional[str] = Field(default=None, max_length=80)
+    entered_at: datetime = Field(index=True)
+    last_seen_at: datetime = Field(index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class VisitorMinutePresence(SQLModel, table=True):
+    """
+    Snapshot histori pengunjung yang masih berada di dalam ruangan per menit.
+    Satu visitor maksimal satu baris untuk setiap menit.
+    """
+    __tablename__ = "visitor_minute_presence"
+    __table_args__ = (
+        UniqueConstraint("snapshot_minute", "visitor_key", name="uq_visitor_minute_presence"),
+    )
+
+    presence_id: Optional[int] = Field(default=None, primary_key=True)
+    snapshot_minute: datetime = Field(index=True)
+    visitor_key: str = Field(max_length=100, index=True)
+    camera_id: int = Field(foreign_key="cameras.camera_id", index=True)
+    area_id: int = Field(foreign_key="counting_areas.area_id", index=True)
+    track_id: Optional[str] = Field(default=None, max_length=80)
+    entered_at: datetime = Field(index=True)
+    snapshot_created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class DailyStats(SQLModel, table=True):

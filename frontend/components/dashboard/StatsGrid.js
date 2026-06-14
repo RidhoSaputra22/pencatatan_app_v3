@@ -95,6 +95,21 @@ const KPI_CONFIG = [
     ),
   },
   {
+    key: "currentInside",
+    label: "Di Dalam Ruangan",
+    sub: "Pengunjung yang masih aktif di area",
+    gradient: "from-warning/10 to-warning/5",
+    borderColor: "border-l-warning",
+    valueColor: "text-warning",
+    bgIcon: "bg-warning/10",
+    sparkColor: "#f59e0b",
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-6 h-6">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-3A2.25 2.25 0 0 0 8.25 5.25V9m7.5 0h.75A2.25 2.25 0 0 1 18.75 11.25v6A2.25 2.25 0 0 1 16.5 19.5h-9A2.25 2.25 0 0 1 5.25 17.25v-6A2.25 2.25 0 0 1 7.5 9h.75m7.5 0h-7.5" />
+      </svg>
+    ),
+  },
+  {
     key: "uniqueVisitors",
     label: "Pengunjung Unik",
     sub: "Orang unik per hari",
@@ -116,14 +131,20 @@ export default function StatsGrid({
   uniqueVisitors,
   totalIn,
   totalOut,
+  currentInside,
   changePercents = {},
   hiddenKeys = [],
 }) {
-  const values = { totalEvents, totalIn, totalOut, uniqueVisitors };
+  const values = { totalEvents, totalIn, totalOut, currentInside, uniqueVisitors };
   const visibleItems = KPI_CONFIG.filter(({ key }) => !hiddenKeys.includes(key));
-  const gridClassName = visibleItems.length === 3
-    ? "grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3"
-    : "grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4";
+  const gridColumnClassMap = {
+    1: "grid-cols-1",
+    2: "grid-cols-1 sm:grid-cols-2",
+    3: "grid-cols-1 sm:grid-cols-2 xl:grid-cols-3",
+    4: "grid-cols-1 sm:grid-cols-2 xl:grid-cols-4",
+    5: "grid-cols-1 sm:grid-cols-2 xl:grid-cols-5",
+  };
+  const gridClassName = `grid gap-5 ${gridColumnClassMap[visibleItems.length] || gridColumnClassMap[4]}`;
 
   return (
     <section className={gridClassName}>

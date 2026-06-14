@@ -23,12 +23,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -53,7 +55,9 @@ SIMULATION_TARGET_MONTH = 6
 HEALTH_POLL_SECONDS = 3
 SOURCE_STOP_GRACE_SECONDS = 12
 PROGRESS_LOG_INTERVAL_SECONDS = 60
-CAPTURE_FINALIZE_TIMEOUT_SECONDS = 180
+CAPTURE_FINALIZE_TIMEOUT_SECONDS = 900
+OVERLAY_CAPTURE_FPS = 10.0
+OVERLAY_CAPTURE_START_TIMEOUT_SECONDS = 30.0
 SIMULATION_TARGET_PATTERN = re.compile(
     r"(?P<day>\d{2})_(?P<start_hour>\d{2})-(?P<end_hour>\d{2})\.repaired\.mp4$",
     re.IGNORECASE,
@@ -79,11 +83,13 @@ class SimulationTarget:
 
 @dataclass
 class OverlayCaptureJob:
-    process: subprocess.Popen
+    thread: threading.Thread
+    stop_event: threading.Event
     temp_output: Path
     destination: Path
     output_name: str
     timeout_seconds: float
+    state: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -226,6 +232,52 @@ def load_video_duration_seconds(path: Path) -> float:
         return float((result.stdout or "").strip())
     except ValueError as exc:
         fail(f"durasi video tidak valid untuk {path.name}: {exc}")
+
+
+def probe_video_file(path: Path) -> tuple[bool, str]:
+    if not path.exists():
+        return False, "file tidak ditemukan"
+
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=codec_name",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "json",
+        str(path),
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+    except OSError as exc:
+        return False, f"ffprobe tidak tersedia: {exc}"
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip() or "unknown ffprobe error"
+        return False, detail
+
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        return False, f"output ffprobe tidak valid: {exc}"
+
+    streams = payload.get("streams") or []
+    codec_name = str((streams[0] or {}).get("codec_name") or "").strip() if streams else ""
+    raw_duration = str((payload.get("format") or {}).get("duration") or "").strip()
+    if not codec_name:
+        return False, "stream video tidak terdeteksi"
+    try:
+        duration = float(raw_duration)
+    except ValueError:
+        return False, f"durasi ffprobe tidak valid: {raw_duration!r}"
+    if duration <= 0:
+        return False, f"durasi video tidak masuk akal: {duration}"
+    return True, f"codec={codec_name}, duration={duration:.2f}s"
 
 
 def parse_db_datetime(raw_value: Optional[str]) -> Optional[datetime]:
@@ -374,6 +426,7 @@ def current_max_id(connection: sqlite3.Connection, table: str, id_column: str) -
 def wait_for_source(source_path: Path, timeout_seconds: int = 90) -> None:
     deadline = time.time() + timeout_seconds
     wanted = str(source_path.resolve())
+    replay_forced = False
     while time.time() < deadline:
         try:
             health = fetch_edge_health()
@@ -384,15 +437,109 @@ def wait_for_source(source_path: Path, timeout_seconds: int = 90) -> None:
             if health.get("has_frame"):
                 info(f"edge sudah memproses {source_path.name}")
                 return
+            status = str(health.get("status") or "").strip().lower()
+            if status == "stopped" and not replay_forced:
+                replay_forced = True
+                force_edge_source_replay(
+                    source_path,
+                    reason=(
+                        f"edge masih berhenti di source yang sama ({source_path.name})"
+                    ),
+                )
+                deadline = max(deadline, time.time() + timeout_seconds)
+                continue
         time.sleep(HEALTH_POLL_SECONDS)
     fail(f"edge tidak beralih ke sumber {source_path.name} dalam {timeout_seconds} detik")
 
 
-def start_overlay_capture(target: SimulationTarget, duration_seconds: float) -> OverlayCaptureJob:
-    output_name = recording_name_for(target)
-    destination = FOOTAGE_DIR / output_name
-    temp_output = create_temp_capture_path(output_name)
-    timeout_seconds = CAPTURE_FINALIZE_TIMEOUT_SECONDS
+def force_edge_source_replay(source_path: Path, *, reason: str) -> None:
+    wanted = str(source_path.resolve())
+    info(f"{reason}; memaksa reset source lalu replay ulang")
+
+    runtime_payload = read_runtime_config()
+    runtime_payload.setdefault("values", {})["EDGE_STREAM_URL"] = ""
+    write_runtime_config(runtime_payload)
+    wait_for_runtime_reload()
+
+    runtime_payload = read_runtime_config()
+    runtime_payload.setdefault("values", {})["EDGE_STREAM_URL"] = wanted
+    write_runtime_config(runtime_payload)
+    wait_for_runtime_reload()
+
+
+def _require_cv2():
+    try:
+        import cv2  # type: ignore
+    except ModuleNotFoundError as exc:
+        fail(
+            "OpenCV (cv2) tidak tersedia di interpreter aktif. "
+            "Jalankan script ini dengan Python environment edge yang sudah terpasang dependency-nya."
+        )
+        raise exc
+    return cv2
+
+
+def _open_overlay_writer(output_path: Path, frame):
+    cv2 = _require_cv2()
+    frame_size = (int(frame.shape[1]), int(frame.shape[0]))
+    writer = cv2.VideoWriter(
+        str(output_path),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        OVERLAY_CAPTURE_FPS,
+        frame_size,
+    )
+    if not writer.isOpened():
+        raise RuntimeError(f"gagal membuka writer overlay untuk {output_path.name}")
+    return writer
+
+
+def _capture_overlay_stream(job: OverlayCaptureJob) -> None:
+    cv2 = _require_cv2()
+    capture = cv2.VideoCapture(PROCESSED_STREAM_URL)
+    writer = None
+    try:
+        capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    except Exception:
+        pass
+    try:
+        capture.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10_000)
+        capture.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 10_000)
+    except Exception:
+        pass
+
+    if not capture.isOpened():
+        job.state["error"] = f"gagal membuka stream overlay {PROCESSED_STREAM_URL}"
+        return
+
+    try:
+        while True:
+            ok, frame = capture.read()
+            if ok and frame is not None and getattr(frame, "size", 0) > 0:
+                if writer is None:
+                    writer = _open_overlay_writer(job.temp_output, frame)
+                writer.write(frame)
+                job.state["frame_count"] = int(job.state.get("frame_count", 0)) + 1
+                if not job.state.get("started"):
+                    job.state["started"] = True
+                if job.stop_event.is_set():
+                    break
+                continue
+
+            if job.stop_event.is_set():
+                break
+
+            time.sleep(0.05)
+    except Exception as exc:
+        job.state["error"] = str(exc)
+    finally:
+        if writer is not None:
+            writer.release()
+        capture.release()
+
+
+def _transcode_overlay_capture(source_path: Path, destination_path: Path) -> None:
+    temp_output = destination_path.with_suffix(".tmp.mp4")
+    temp_output.unlink(missing_ok=True)
     command = [
         "ffmpeg",
         "-y",
@@ -400,7 +547,7 @@ def start_overlay_capture(target: SimulationTarget, duration_seconds: float) -> 
         "-loglevel",
         "error",
         "-i",
-        PROCESSED_STREAM_URL,
+        str(source_path),
         "-an",
         "-c:v",
         "libx264",
@@ -412,65 +559,133 @@ def start_overlay_capture(target: SimulationTarget, duration_seconds: float) -> 
         "+faststart",
         str(temp_output),
     ]
-
     try:
-        process = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
     except OSError as exc:
         temp_output.unlink(missing_ok=True)
-        fail(f"ffmpeg tidak tersedia untuk capture overlay: {exc}")
+        fail(f"ffmpeg tidak tersedia untuk finalisasi overlay: {exc}")
 
-    info(f"capture overlay dimulai untuk {output_name}")
-    return OverlayCaptureJob(
-        process=process,
+    if result.returncode != 0 or not temp_output.exists():
+        temp_output.unlink(missing_ok=True)
+        detail = (result.stderr or result.stdout or "").strip() or "unknown ffmpeg error"
+        fail(f"gagal finalisasi overlay {destination_path.name}: {detail}")
+
+    destination_path.unlink(missing_ok=True)
+    temp_output.replace(destination_path)
+    source_path.unlink(missing_ok=True)
+
+
+def start_overlay_capture(target: SimulationTarget, duration_seconds: float) -> OverlayCaptureJob:
+    output_name = recording_name_for(target)
+    destination = FOOTAGE_DIR / output_name
+    temp_output = create_temp_capture_path(output_name)
+    timeout_seconds = max(
+        CAPTURE_FINALIZE_TIMEOUT_SECONDS,
+        min(int(duration_seconds * 0.03), 3600),
+    )
+    stop_event = threading.Event()
+    state: dict[str, Any] = {"error": None, "frame_count": 0, "started": False}
+    job = OverlayCaptureJob(
+        thread=threading.current_thread(),
+        stop_event=stop_event,
         temp_output=temp_output,
         destination=destination,
         output_name=output_name,
         timeout_seconds=timeout_seconds,
+        state=state,
     )
+    job.thread = threading.Thread(
+        target=_capture_overlay_stream,
+        args=(job,),
+        name=f"overlay-capture-{Path(output_name).stem}",
+        daemon=True,
+    )
+    job.thread.start()
+
+    deadline = time.time() + OVERLAY_CAPTURE_START_TIMEOUT_SECONDS
+    replay_forced = False
+    while time.time() < deadline:
+        if job.state.get("error"):
+            job.stop_event.set()
+            job.thread.join(timeout=5)
+            job.temp_output.unlink(missing_ok=True)
+            fail(f"capture overlay gagal memulai untuk {output_name}: {job.state['error']}")
+        if int(job.state.get("frame_count", 0)) > 0:
+            info(f"capture overlay dimulai untuk {output_name}")
+            return job
+        if not job.thread.is_alive():
+            break
+        time.sleep(0.2)
+
+    if not replay_forced and int(job.state.get("frame_count", 0)) <= 0 and job.thread.is_alive():
+        replay_forced = True
+        force_edge_source_replay(
+            target.source_path,
+            reason=(
+                f"capture overlay belum menerima frame dari stream untuk {output_name}"
+            ),
+        )
+        deadline = time.time() + OVERLAY_CAPTURE_START_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            if job.state.get("error"):
+                job.stop_event.set()
+                job.thread.join(timeout=5)
+                job.temp_output.unlink(missing_ok=True)
+                fail(f"capture overlay gagal memulai untuk {output_name}: {job.state['error']}")
+            if int(job.state.get("frame_count", 0)) > 0:
+                info(f"capture overlay dimulai untuk {output_name}")
+                return job
+            if not job.thread.is_alive():
+                break
+            time.sleep(0.2)
+
+    job.stop_event.set()
+    job.thread.join(timeout=5)
+    job.temp_output.unlink(missing_ok=True)
+    detail = str(job.state.get("error") or "stream overlay tidak mengirim frame")
+    try:
+        health = fetch_edge_health()
+    except Exception:
+        health = None
+    if health:
+        detail = (
+            f"{detail} | status={health.get('status')} | "
+            f"camera_source={health.get('camera_source')} | "
+            f"has_frame={health.get('has_frame')}"
+        )
+    fail(f"capture overlay gagal memulai untuk {output_name}: {detail}")
 
 
 def finish_overlay_capture(job: OverlayCaptureJob) -> str:
-    stdout = ""
-    stderr = ""
-    if job.process.poll() is None:
-        info(f"menghentikan capture overlay untuk {job.output_name} dan menunggu flush ffmpeg")
-        if job.process.stdin is not None:
-            try:
-                job.process.stdin.write("q\n")
-                job.process.stdin.flush()
-            except (BrokenPipeError, OSError):
-                pass
-    try:
-        stdout, stderr = job.process.communicate(timeout=job.timeout_seconds)
-    except subprocess.TimeoutExpired:
-        job.process.terminate()
-        try:
-            stdout, stderr = job.process.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            job.process.kill()
-            stdout, stderr = job.process.communicate()
-        if not job.temp_output.exists():
-            detail = (stderr or stdout or "").strip() or "capture timeout"
-            fail(f"capture overlay timeout untuk {job.output_name}: {detail}")
+    info(f"menghentikan capture overlay untuk {job.output_name} dan menunggu flush writer")
+    job.stop_event.set()
+    job.thread.join(timeout=job.timeout_seconds)
+    if job.thread.is_alive():
+        fail(f"capture overlay timeout untuk {job.output_name}: writer tidak selesai ditutup")
+    if job.state.get("error"):
+        job.temp_output.unlink(missing_ok=True)
+        fail(f"capture overlay gagal untuk {job.output_name}: {job.state['error']}")
 
     if not job.temp_output.exists() or job.temp_output.stat().st_size <= 0:
         job.temp_output.unlink(missing_ok=True)
-        detail = (stderr or stdout or "").strip() or "unknown ffmpeg error"
+        detail = "writer overlay tidak menghasilkan file"
         fail(f"capture overlay gagal untuk {job.output_name}: {detail}")
-    if job.process.returncode not in {0, None}:
-        warn(
-            f"ffmpeg selesai dengan kode {job.process.returncode} untuk {job.output_name}, "
-            "tetapi file output sudah terbentuk dan akan dipakai."
+
+    is_valid_output, validation_detail = probe_video_file(job.temp_output)
+    if not is_valid_output:
+        fail(
+            f"capture overlay menghasilkan file tidak valid untuk {job.output_name}: "
+            f"validasi output gagal: {validation_detail}"
         )
 
-    job.destination.unlink(missing_ok=True)
-    job.temp_output.replace(job.destination)
+    _transcode_overlay_capture(job.temp_output, job.destination)
+    is_valid_destination, destination_detail = probe_video_file(job.destination)
+    if not is_valid_destination:
+        job.destination.unlink(missing_ok=True)
+        fail(
+            f"overlay recording final tidak valid untuk {job.output_name}: "
+            f"{destination_detail}"
+        )
     info(f"overlay recording tersimpan: {job.output_name}")
     return job.output_name
 
@@ -693,6 +908,39 @@ def recording_name_for(target: SimulationTarget) -> str:
     )
 
 
+def recording_preview_path_for(recording_name: str) -> Path:
+    PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+    return PREVIEW_DIR / f"{Path(recording_name).stem}.browser.mp4"
+
+
+def link_or_copy(source_path: Path, destination_path: Path) -> str:
+    try:
+        os.link(source_path, destination_path)
+        return "hardlink"
+    except OSError:
+        shutil.copy2(source_path, destination_path)
+        return "copy"
+
+
+def save_overlay_preview(recording_path: Path) -> Path:
+    if not recording_path.exists():
+        fail(f"file rekaman overlay tidak ditemukan untuk preview: {recording_path}")
+
+    preview_path = recording_preview_path_for(recording_path.name)
+    temp_preview_path = preview_path.with_suffix(".tmp.mp4")
+    temp_preview_path.unlink(missing_ok=True)
+
+    try:
+        mode = link_or_copy(recording_path, temp_preview_path)
+        temp_preview_path.replace(preview_path)
+    except Exception:
+        temp_preview_path.unlink(missing_ok=True)
+        raise
+
+    info(f"preview overlay tersimpan: {preview_path.name} ({mode})")
+    return preview_path
+
+
 def query_daily_stats() -> list[sqlite3.Row]:
     with with_connection() as connection:
         return connection.execute(
@@ -825,6 +1073,10 @@ def prune_to_completed_state(completed_targets: dict[str, dict[str, Any]]) -> No
             shutil.rmtree(item)
 
     clear_directory(PREVIEW_DIR)
+    for recording_name in sorted(allowed_recordings):
+        recording_path = FOOTAGE_DIR / recording_name
+        if recording_path.exists():
+            save_overlay_preview(recording_path)
 
 
 def update_runtime_values(runtime_payload: Dict[str, Any], values: Dict[str, str]) -> Dict[str, Optional[str]]:
@@ -996,6 +1248,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     f"clip {target.filename} timeout sebelum edge melaporkan EOF. "
                     "Progress untuk target ini belum ditandai complete agar aman di-run ulang."
                 )
+            save_overlay_preview(capture_job.destination)
             shifted = redate_new_rows(
                 target,
                 baseline_event_id=baseline_event_id,

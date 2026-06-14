@@ -170,3 +170,5 @@ rstp/*.txt
 
 .cctv_recording_*
 simulate_may_*
+
+backend/storage/

@@ -25,7 +25,7 @@ from .settings import settings
 from .db import init_db, get_session, engine
 from .models import (
     Role, User, Camera, CountingArea,
-    Employee, VisitorDaily, VisitEvent, DailyStats
+    Employee, VisitorDaily, VisitEvent, CurrentVisitor, VisitorMinutePresence, DailyStats
 )
 from .auth import (
     hash_password, verify_password, create_access_token,
@@ -98,6 +98,23 @@ try:
     VISIT_EVENT_DEDUPE_SECONDS = max(0.0, float(os.getenv("VISIT_EVENT_DEDUPE_SECONDS", "20")))
 except ValueError:
     VISIT_EVENT_DEDUPE_SECONDS = 20.0
+try:
+    VISITOR_PRESENCE_SNAPSHOT_INTERVAL_SECONDS = max(
+        5.0,
+        float(os.getenv("VISITOR_PRESENCE_SNAPSHOT_INTERVAL_SECONDS", "30")),
+    )
+except ValueError:
+    VISITOR_PRESENCE_SNAPSHOT_INTERVAL_SECONDS = 30.0
+try:
+    CURRENT_VISITOR_STALE_SECONDS = max(
+        3.0,
+        float(os.getenv("CURRENT_VISITOR_STALE_SECONDS", "10")),
+    )
+except ValueError:
+    CURRENT_VISITOR_STALE_SECONDS = 10.0
+
+PRESENCE_SNAPSHOT_STOP_EVENT = threading.Event()
+PRESENCE_SNAPSHOT_THREAD: Optional[threading.Thread] = None
 
 
 # ==================== Pydantic Schemas ====================
@@ -203,6 +220,44 @@ class DashboardSummary(BaseModel):
     unique_visitors: int
     total_in: int
     total_out: int
+    current_inside: int = 0
+
+
+class CurrentVisitorOut(BaseModel):
+    current_visitor_id: int
+    visitor_key: str
+    camera_id: int
+    area_id: int
+    track_id: Optional[str] = None
+    entered_at: datetime
+    last_seen_at: datetime
+    duration_minutes: int
+
+
+class VisitorMinutePresenceOut(BaseModel):
+    presence_id: int
+    snapshot_minute: datetime
+    visitor_key: str
+    camera_id: int
+    area_id: int
+    track_id: Optional[str] = None
+    entered_at: datetime
+    duration_minutes: int
+
+
+class CurrentPresenceVisitorIn(BaseModel):
+    visitor_key: str
+    area_id: Optional[int] = None
+    track_id: Optional[str] = None
+    person_type: str = "CUSTOMER"
+    first_seen_at: Optional[datetime] = None
+    last_seen_at: Optional[datetime] = None
+
+
+class CurrentPresenceIn(BaseModel):
+    camera_id: int
+    observed_at: datetime
+    visitors: List[CurrentPresenceVisitorIn] = []
 
 
 class RuntimeConfigUpdate(BaseModel):
@@ -226,6 +281,438 @@ def serialize_employee(employee: Employee) -> EmployeeOut:
 def dashboard_total_activity(unique_visitors: int, total_out: int) -> int:
     """Total aktivitas dashboard = masuk unik + keluar."""
     return int(unique_visitors or 0) + int(total_out or 0)
+
+
+def current_visitor_stale_before(reference_time: Optional[datetime] = None) -> datetime:
+    reference = reference_time or datetime.now()
+    return reference - timedelta(seconds=CURRENT_VISITOR_STALE_SECONDS)
+
+
+def floor_to_minute(value: datetime) -> datetime:
+    return value.replace(second=0, microsecond=0)
+
+
+def build_period_bounds(
+    *,
+    from_date: Optional[date],
+    to_date: Optional[date],
+    from_datetime: Optional[datetime],
+    to_datetime: Optional[datetime],
+) -> tuple[datetime, datetime]:
+    start_at = from_datetime or datetime.combine(from_date or date.today(), datetime.min.time())
+    end_at = to_datetime or datetime.combine(to_date or from_date or date.today(), datetime.max.time())
+    if start_at > end_at:
+        raise HTTPException(status_code=422, detail="Rentang waktu tidak valid.")
+    return start_at, end_at
+
+
+def build_presence_rows(
+    *,
+    visitor_key: str,
+    camera_id: int,
+    area_id: int,
+    track_id: Optional[str],
+    entered_at: datetime,
+    segment_start: datetime,
+    segment_end: datetime,
+) -> List[Dict[str, Any]]:
+    if not visitor_key or segment_start > segment_end:
+        return []
+
+    rows: List[Dict[str, Any]] = []
+    current_minute = floor_to_minute(segment_start)
+    last_minute = floor_to_minute(segment_end)
+    while current_minute <= last_minute:
+        rows.append(
+            {
+                "snapshot_minute": current_minute,
+                "visitor_key": visitor_key,
+                "camera_id": camera_id,
+                "area_id": area_id,
+                "track_id": track_id,
+                "entered_at": entered_at,
+            }
+        )
+        current_minute += timedelta(minutes=1)
+    return rows
+
+
+def store_presence_rows(session: Session, rows: List[Dict[str, Any]]) -> int:
+    if not rows:
+        return 0
+
+    result = session.execute(
+        text(
+            "INSERT OR IGNORE INTO visitor_minute_presence "
+            "(snapshot_minute, visitor_key, camera_id, area_id, track_id, entered_at, snapshot_created_at) "
+            "VALUES (:snapshot_minute, :visitor_key, :camera_id, :area_id, :track_id, :entered_at, CURRENT_TIMESTAMP)"
+        ),
+        rows,
+    )
+    return max(int(result.rowcount or 0), 0)
+
+
+def backfill_visitor_minute_presence(
+    session: Session,
+    *,
+    from_datetime: datetime,
+    to_datetime: datetime,
+) -> int:
+    effective_end = min(to_datetime, datetime.now())
+    if from_datetime > effective_end:
+        return 0
+
+    events = session.exec(
+        select(VisitEvent).where(
+            VisitEvent.event_time <= effective_end,
+            or_(VisitEvent.person_type == None, VisitEvent.person_type != "EMPLOYEE"),
+        ).order_by(VisitEvent.event_time.asc(), VisitEvent.event_id.asc())
+    ).all()
+
+    active_states: Dict[str, Dict[str, Any]] = {}
+    presence_rows: List[Dict[str, Any]] = []
+
+    for event in events:
+        visitor_key = (event.visitor_key or "").strip()
+        direction = (event.direction or "").upper()
+
+        if not visitor_key or direction not in {"IN", "OUT"}:
+            continue
+
+        active_state = active_states.get(visitor_key)
+
+        if direction == "IN":
+            if active_state:
+                segment_start = max(active_state["segment_started_at"], from_datetime)
+                segment_end = min(event.event_time, effective_end)
+                if segment_start <= segment_end:
+                    presence_rows.extend(
+                        build_presence_rows(
+                            visitor_key=visitor_key,
+                            camera_id=active_state["camera_id"],
+                            area_id=active_state["area_id"],
+                            track_id=active_state["track_id"],
+                            entered_at=active_state["entered_at"],
+                            segment_start=segment_start,
+                            segment_end=segment_end,
+                        )
+                    )
+
+                active_state["camera_id"] = event.camera_id
+                active_state["area_id"] = event.area_id
+                active_state["track_id"] = event.track_id
+                active_state["entered_at"] = min(active_state["entered_at"], event.event_time)
+                active_state["segment_started_at"] = event.event_time
+                continue
+
+            active_states[visitor_key] = {
+                "entered_at": event.event_time,
+                "segment_started_at": event.event_time,
+                "camera_id": event.camera_id,
+                "area_id": event.area_id,
+                "track_id": event.track_id,
+            }
+            continue
+
+        if not active_state:
+            continue
+
+        segment_start = max(active_state["segment_started_at"], from_datetime)
+        segment_end = min(event.event_time, effective_end)
+        if segment_start <= segment_end:
+            presence_rows.extend(
+                build_presence_rows(
+                    visitor_key=visitor_key,
+                    camera_id=active_state["camera_id"],
+                    area_id=active_state["area_id"],
+                    track_id=active_state["track_id"],
+                    entered_at=active_state["entered_at"],
+                    segment_start=segment_start,
+                    segment_end=segment_end,
+                )
+            )
+        active_states.pop(visitor_key, None)
+
+    for visitor_key, active_state in active_states.items():
+        segment_start = max(active_state["segment_started_at"], from_datetime)
+        if segment_start > effective_end:
+            continue
+        presence_rows.extend(
+            build_presence_rows(
+                visitor_key=visitor_key,
+                camera_id=active_state["camera_id"],
+                area_id=active_state["area_id"],
+                track_id=active_state["track_id"],
+                entered_at=active_state["entered_at"],
+                segment_start=segment_start,
+                segment_end=effective_end,
+            )
+        )
+
+    return store_presence_rows(session, presence_rows)
+
+
+def snapshot_current_visitors(
+    session: Session,
+    *,
+    snapshot_time: Optional[datetime] = None,
+    visitors: Optional[List[CurrentVisitor]] = None,
+) -> int:
+    snapshot_at = snapshot_time or datetime.now()
+    snapshot_minute = floor_to_minute(snapshot_at)
+    source_visitors = visitors
+    if source_visitors is None:
+        source_visitors = session.exec(
+            select(CurrentVisitor).where(
+                CurrentVisitor.last_seen_at >= current_visitor_stale_before(snapshot_at)
+            )
+        ).all()
+
+    rows = [
+        {
+            "snapshot_minute": snapshot_minute,
+            "visitor_key": visitor.visitor_key,
+            "camera_id": visitor.camera_id,
+            "area_id": visitor.area_id,
+            "track_id": visitor.track_id,
+            "entered_at": visitor.entered_at,
+        }
+        for visitor in source_visitors
+        if visitor.entered_at <= snapshot_at
+        and visitor.last_seen_at >= current_visitor_stale_before(snapshot_at)
+    ]
+    return store_presence_rows(session, rows)
+
+
+def run_presence_snapshot_loop() -> None:
+    while not PRESENCE_SNAPSHOT_STOP_EVENT.wait(VISITOR_PRESENCE_SNAPSHOT_INTERVAL_SECONDS):
+        try:
+            with Session(engine) as session:
+                cleanup_stale_current_visitors(session)
+                snapshot_current_visitors(session)
+                session.commit()
+        except Exception:
+            logger.exception("Failed to persist visitor minute presence snapshot")
+
+
+def cleanup_stale_current_visitors(
+    session: Session,
+    *,
+    reference_time: Optional[datetime] = None,
+    camera_id: Optional[int] = None,
+) -> int:
+    stale_before = current_visitor_stale_before(reference_time)
+    stmt = delete(CurrentVisitor).where(CurrentVisitor.last_seen_at < stale_before)
+    if camera_id:
+        stmt = stmt.where(CurrentVisitor.camera_id == camera_id)
+    result = session.exec(stmt)
+    return max(int(result.rowcount or 0), 0)
+
+
+def sync_current_visitors_from_presence(
+    session: Session,
+    payload: CurrentPresenceIn,
+) -> int:
+    observed_at = payload.observed_at
+    cleanup_stale_current_visitors(session, reference_time=observed_at)
+
+    normalized_visitors: List[Dict[str, Any]] = []
+    for item in payload.visitors:
+        visitor_key = (item.visitor_key or "").strip()
+        person_type = (item.person_type or "CUSTOMER").upper()
+        if not visitor_key or person_type == "EMPLOYEE":
+            continue
+
+        first_seen_at = item.first_seen_at or observed_at
+        last_seen_at = item.last_seen_at or observed_at
+        normalized_visitors.append(
+            {
+                "visitor_key": visitor_key,
+                "camera_id": payload.camera_id,
+                "area_id": item.area_id or 1,
+                "track_id": item.track_id,
+                "first_seen_at": first_seen_at,
+                "last_seen_at": last_seen_at,
+            }
+        )
+
+    active_keys = [item["visitor_key"] for item in normalized_visitors]
+    delete_stmt = delete(CurrentVisitor).where(CurrentVisitor.camera_id == payload.camera_id)
+    if active_keys:
+        delete_stmt = delete_stmt.where(CurrentVisitor.visitor_key.notin_(active_keys))
+    session.exec(delete_stmt)
+
+    existing_rows = {}
+    if active_keys:
+        rows = session.exec(
+            select(CurrentVisitor).where(CurrentVisitor.visitor_key.in_(active_keys))
+        ).all()
+        existing_rows = {row.visitor_key: row for row in rows}
+
+    synced_rows: List[CurrentVisitor] = []
+    stale_before = current_visitor_stale_before(observed_at)
+    for item in normalized_visitors:
+        current_visitor = existing_rows.get(item["visitor_key"])
+        if not current_visitor:
+            current_visitor = CurrentVisitor(
+                visitor_key=item["visitor_key"],
+                camera_id=item["camera_id"],
+                area_id=item["area_id"],
+                track_id=item["track_id"],
+                entered_at=item["first_seen_at"],
+                last_seen_at=item["last_seen_at"],
+            )
+            session.add(current_visitor)
+            synced_rows.append(current_visitor)
+            continue
+
+        if current_visitor.last_seen_at < stale_before:
+            current_visitor.entered_at = item["first_seen_at"]
+        else:
+            current_visitor.entered_at = min(current_visitor.entered_at, item["first_seen_at"])
+        current_visitor.camera_id = item["camera_id"]
+        current_visitor.area_id = item["area_id"]
+        current_visitor.track_id = item["track_id"]
+        current_visitor.last_seen_at = max(current_visitor.last_seen_at, item["last_seen_at"])
+        current_visitor.updated_at = datetime.utcnow()
+        session.add(current_visitor)
+        synced_rows.append(current_visitor)
+
+    store_presence_rows(
+        session,
+        [
+            {
+                "snapshot_minute": floor_to_minute(observed_at),
+                "visitor_key": visitor.visitor_key,
+                "camera_id": visitor.camera_id,
+                "area_id": visitor.area_id,
+                "track_id": visitor.track_id,
+                "entered_at": visitor.entered_at,
+            }
+            for visitor in synced_rows
+        ],
+    )
+    return len(synced_rows)
+
+
+def count_current_visitors(session: Session) -> int:
+    """Hitung jumlah pengunjung yang saat ini masih berada di dalam ruangan."""
+    stale_before = current_visitor_stale_before()
+    return int(
+        session.exec(
+            select(func.count()).select_from(CurrentVisitor).where(
+                CurrentVisitor.last_seen_at >= stale_before
+            )
+        ).one() or 0
+    )
+
+
+def apply_current_visitor_state(
+    session: Session,
+    *,
+    camera_id: int,
+    area_id: int,
+    event_time: datetime,
+    track_id: Optional[str],
+    visitor_key: str,
+    direction: Optional[str],
+    person_type: str,
+) -> None:
+    """Sinkronkan tabel current_visitors berdasarkan event IN/OUT terbaru."""
+    if person_type == "EMPLOYEE" or not visitor_key:
+        return
+
+    normalized_direction = (direction or "").upper()
+    if normalized_direction not in {"IN", "OUT"}:
+        return
+
+    current_visitor = session.exec(
+        select(CurrentVisitor).where(CurrentVisitor.visitor_key == visitor_key)
+    ).first()
+
+    if normalized_direction == "IN":
+        if not current_visitor:
+            current_visitor = CurrentVisitor(
+                visitor_key=visitor_key,
+                camera_id=camera_id,
+                area_id=area_id,
+                track_id=track_id,
+                entered_at=event_time,
+                last_seen_at=event_time,
+            )
+            session.add(current_visitor)
+            return
+
+        current_visitor.camera_id = camera_id
+        current_visitor.area_id = area_id
+        current_visitor.track_id = track_id
+        current_visitor.entered_at = min(current_visitor.entered_at, event_time)
+        current_visitor.last_seen_at = max(current_visitor.last_seen_at, event_time)
+        current_visitor.updated_at = datetime.utcnow()
+        return
+
+    if current_visitor:
+        session.delete(current_visitor)
+
+
+def rebuild_current_visitors(
+    session: Session,
+    visitor_keys: Optional[set[str]] = None,
+) -> None:
+    """
+    Bangun ulang current_visitors dari visit_events agar state aktif tetap sinkron
+    setelah startup, reset, atau hapus event manual.
+    """
+    normalized_keys = (
+        sorted({key for key in (visitor_keys or set()) if key})
+        if visitor_keys is not None
+        else None
+    )
+
+    event_query = select(VisitEvent).where(
+        or_(VisitEvent.person_type == None, VisitEvent.person_type != "EMPLOYEE")
+    )
+
+    if normalized_keys is None:
+        session.exec(delete(CurrentVisitor))
+    else:
+        if not normalized_keys:
+            return
+        session.exec(
+            delete(CurrentVisitor).where(CurrentVisitor.visitor_key.in_(normalized_keys))
+        )
+        event_query = event_query.where(VisitEvent.visitor_key.in_(normalized_keys))
+
+    active_visitors: dict[str, dict[str, Any]] = {}
+    events = session.exec(
+        event_query.order_by(VisitEvent.event_time.asc(), VisitEvent.event_id.asc())
+    ).all()
+
+    for event in events:
+        direction = (event.direction or "").upper()
+        if direction == "IN":
+            current_visitor = active_visitors.get(event.visitor_key)
+            if not current_visitor:
+                active_visitors[event.visitor_key] = {
+                    "visitor_key": event.visitor_key,
+                    "camera_id": event.camera_id,
+                    "area_id": event.area_id,
+                    "track_id": event.track_id,
+                    "entered_at": event.event_time,
+                    "last_seen_at": event.event_time,
+                }
+                continue
+
+            current_visitor["camera_id"] = event.camera_id
+            current_visitor["area_id"] = event.area_id
+            current_visitor["track_id"] = event.track_id
+            current_visitor["entered_at"] = min(current_visitor["entered_at"], event.event_time)
+            current_visitor["last_seen_at"] = max(current_visitor["last_seen_at"], event.event_time)
+        elif direction == "OUT":
+            active_visitors.pop(event.visitor_key, None)
+
+    for current_visitor in active_visitors.values():
+        session.add(CurrentVisitor(**current_visitor))
 
 
 def resolve_employee_face_embedding(photo_bytes: bytes, employee_code: str) -> Optional[List[float]]:
@@ -256,6 +743,8 @@ def resolve_employee_face_embedding(photo_bytes: bytes, employee_code: str) -> O
 @app.on_event("startup")
 def on_startup():
     """Initialize database, seed data, and start UDP stream receiver"""
+    global PRESENCE_SNAPSHOT_THREAD
+
     init_db()
 
     # Start UDP stream receiver for client CCTV streaming
@@ -314,6 +803,28 @@ def on_startup():
             )
             session.add(area)
             session.commit()
+
+        rebuild_current_visitors(session)
+        snapshot_current_visitors(session)
+        session.commit()
+
+    PRESENCE_SNAPSHOT_STOP_EVENT.clear()
+    if not PRESENCE_SNAPSHOT_THREAD or not PRESENCE_SNAPSHOT_THREAD.is_alive():
+        PRESENCE_SNAPSHOT_THREAD = threading.Thread(
+            target=run_presence_snapshot_loop,
+            name="visitor-minute-presence",
+            daemon=True,
+        )
+        PRESENCE_SNAPSHOT_THREAD.start()
+
+
+@app.on_event("shutdown")
+def on_shutdown():
+    """Stop background workers gracefully."""
+    PRESENCE_SNAPSHOT_STOP_EVENT.set()
+    if PRESENCE_SNAPSHOT_THREAD and PRESENCE_SNAPSHOT_THREAD.is_alive():
+        PRESENCE_SNAPSHOT_THREAD.join(timeout=2)
+    stop_udp_receiver()
 
 
 # ==================== Health Check ====================
@@ -1040,9 +1551,35 @@ def ingest_event(payload: EventIn, session: Session = Depends(get_session)):
         stats.total_out += 1
     stats.total_events = dashboard_total_activity(stats.unique_visitors, stats.total_out)
     stats.last_updated_at = datetime.utcnow()
+    apply_current_visitor_state(
+        session,
+        camera_id=payload.camera_id,
+        area_id=area_id,
+        event_time=payload.event_time,
+        track_id=payload.track_id,
+        visitor_key=payload.visitor_key,
+        direction=payload.direction,
+        person_type=person_type,
+    )
 
     session.commit()
     return {"ok": True, "is_new_unique": is_new_unique}
+
+
+@app.post("/api/presence/live")
+def ingest_live_presence(
+    payload: CurrentPresenceIn,
+    session: Session = Depends(get_session),
+):
+    """Sinkronkan daftar visitor aktif di area dari edge worker."""
+    synced = sync_current_visitors_from_presence(session, payload)
+    session.commit()
+    return {
+        "ok": True,
+        "synced": synced,
+        "camera_id": payload.camera_id,
+        "observed_at": payload.observed_at.isoformat(),
+    }
 
 
 # ==================== Statistics Endpoints ====================
@@ -1095,13 +1632,15 @@ def stats_summary(
     total_in = unique_visitors
     total_out = sum(s.total_out for s in stats)
     total_events = dashboard_total_activity(unique_visitors, total_out)
+    current_inside = count_current_visitors(session) if target_date == date.today() else 0
     
     return DashboardSummary(
         date=target_date,
         total_events=total_events,
         unique_visitors=unique_visitors,
         total_in=total_in,
-        total_out=total_out
+        total_out=total_out,
+        current_inside=current_inside,
     )
 
 
@@ -1205,7 +1744,10 @@ def delete_event(event_id: int, session: Session = Depends(get_session), _: User
     ev = session.get(VisitEvent, event_id)
     if not ev:
         raise HTTPException(status_code=404, detail="Event not found")
+    visitor_key = ev.visitor_key
     session.delete(ev)
+    session.flush()
+    rebuild_current_visitors(session, {visitor_key})
     session.commit()
     return {"ok": True, "message": "Event deleted"}
 
@@ -1244,6 +1786,98 @@ def list_visitor_daily(
         "notes": v.notes
     } for v in visitors]
 
+
+@app.get("/api/visitors/current", response_model=List[CurrentVisitorOut])
+def list_current_visitors(
+    camera_id: Optional[int] = None,
+    limit: int = 500,
+    session: Session = Depends(get_session),
+    _: User = Depends(require_role("ADMIN", "OPERATOR"))
+):
+    """List pengunjung yang saat ini masih berada di dalam ruangan."""
+    stale_before = current_visitor_stale_before()
+    q = select(CurrentVisitor).where(CurrentVisitor.last_seen_at >= stale_before)
+    if camera_id:
+        q = q.where(CurrentVisitor.camera_id == camera_id)
+
+    now = datetime.now()
+    visitors = session.exec(
+        q.order_by(CurrentVisitor.entered_at.desc()).limit(limit)
+    ).all()
+
+    return [
+        CurrentVisitorOut(
+            current_visitor_id=v.current_visitor_id,
+            visitor_key=v.visitor_key,
+            camera_id=v.camera_id,
+            area_id=v.area_id,
+            track_id=v.track_id,
+            entered_at=v.entered_at,
+            last_seen_at=v.last_seen_at,
+            duration_minutes=max(int((now - v.entered_at).total_seconds() // 60), 0),
+        )
+        for v in visitors
+    ]
+
+
+@app.get("/api/visitors/current-history", response_model=List[VisitorMinutePresenceOut])
+def list_current_visitor_history(
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
+    from_datetime: Optional[datetime] = None,
+    to_datetime: Optional[datetime] = None,
+    camera_id: Optional[int] = None,
+    limit: int = 2000,
+    session: Session = Depends(get_session),
+    _: User = Depends(require_role("ADMIN", "OPERATOR"))
+):
+    """List histori snapshot pengunjung di dalam ruangan per menit."""
+    start_at, end_at = build_period_bounds(
+        from_date=from_date,
+        to_date=to_date,
+        from_datetime=from_datetime,
+        to_datetime=to_datetime,
+    )
+
+    backfill_visitor_minute_presence(
+        session,
+        from_datetime=start_at,
+        to_datetime=end_at,
+    )
+    session.commit()
+
+    q = select(VisitorMinutePresence).where(
+        VisitorMinutePresence.snapshot_minute >= start_at,
+        VisitorMinutePresence.snapshot_minute <= min(end_at, datetime.now()),
+    )
+    if camera_id:
+        q = q.where(VisitorMinutePresence.camera_id == camera_id)
+
+    rows = session.exec(
+        q.order_by(
+            VisitorMinutePresence.snapshot_minute.desc(),
+            VisitorMinutePresence.entered_at.desc(),
+        ).limit(limit)
+    ).all()
+
+    return [
+        VisitorMinutePresenceOut(
+            presence_id=row.presence_id,
+            snapshot_minute=row.snapshot_minute,
+            visitor_key=row.visitor_key,
+            camera_id=row.camera_id,
+            area_id=row.area_id,
+            track_id=row.track_id,
+            entered_at=row.entered_at,
+            duration_minutes=max(
+                int((row.snapshot_minute - row.entered_at).total_seconds() // 60),
+                0,
+            ),
+        )
+        for row in rows
+    ]
+
+
 @app.get("/api/cameras/list/all", response_model=List[CameraOut])
 def list_all_cameras(session: Session = Depends(get_session), _: User = Depends(require_role("ADMIN", "OPERATOR"))):
     """List all cameras (including inactive) for admin management"""
@@ -1270,6 +1904,8 @@ def reset_database(
         # Bulk DELETE — jauh lebih cepat daripada load semua row ke memory
         session.exec(text("DELETE FROM visit_events"))
         session.exec(text("DELETE FROM visitor_daily"))
+        session.exec(text("DELETE FROM current_visitors"))
+        session.exec(text("DELETE FROM visitor_minute_presence"))
         session.exec(text("DELETE FROM daily_stats"))
         
         session.commit()
@@ -1309,6 +1945,20 @@ def reset_daily_database(
         daily_stats_deleted = session.exec(
             delete(DailyStats).where(DailyStats.stat_date == day)
         )
+        current_visitors_deleted = session.exec(
+            delete(CurrentVisitor).where(
+                or_(
+                    func.date(CurrentVisitor.entered_at) == day_label,
+                    func.date(CurrentVisitor.last_seen_at) == day_label,
+                )
+            )
+        )
+        visitor_minute_presence_deleted = session.exec(
+            delete(VisitorMinutePresence).where(
+                func.date(VisitorMinutePresence.snapshot_minute) == day_label
+            )
+        )
+        rebuild_current_visitors(session)
 
         session.commit()
 
@@ -1321,6 +1971,8 @@ def reset_daily_database(
                 "visit_events": max(int(visit_events_deleted.rowcount or 0), 0),
                 "visitor_daily": max(int(visitor_daily_deleted.rowcount or 0), 0),
                 "daily_stats": max(int(daily_stats_deleted.rowcount or 0), 0),
+                "current_visitors": max(int(current_visitors_deleted.rowcount or 0), 0),
+                "visitor_minute_presence": max(int(visitor_minute_presence_deleted.rowcount or 0), 0),
             },
         }
     except Exception as e:
