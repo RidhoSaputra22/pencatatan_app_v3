@@ -9,6 +9,7 @@ import {
   STREAM_URL,
   WEBRTC_SIGNAL_URL,
 } from "@/lib/constants";
+import { useClientRuntimeConfig } from "@/hooks/useClientRuntimeConfig";
 
 const RECONNECT_DELAY_MS = 1500;
 const HEALTH_POLL_MS = Math.max(STREAM_HEALTH_INTERVAL || 0, 1500);
@@ -74,6 +75,7 @@ function waitForIceGatheringComplete(pc, timeoutMs = 2000) {
  * Fallback path: MJPEG edge feed / backend relay.
  */
 export default function CameraView() {
+  const { clientPollingEnabled } = useClientRuntimeConfig();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [streamSrc, setStreamSrc] = useState("");
@@ -314,20 +316,25 @@ export default function CameraView() {
     mountedRef.current = true;
     ensureStream(true);
 
-    const intervalId = window.setInterval(() => {
-      ensureStream(false);
-    }, HEALTH_POLL_MS);
+    const intervalId =
+      clientPollingEnabled === true && HEALTH_POLL_MS > 0
+        ? window.setInterval(() => {
+            ensureStream(false);
+          }, HEALTH_POLL_MS)
+        : null;
 
     return () => {
       mountedRef.current = false;
-      window.clearInterval(intervalId);
+      if (intervalId) {
+        window.clearInterval(intervalId);
+      }
       if (reconnectTimerRef.current) {
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
       }
       cleanupPeerConnection();
     };
-  }, [cleanupPeerConnection, ensureStream]);
+  }, [cleanupPeerConnection, clientPollingEnabled, ensureStream]);
 
   const handleImageError = () => {
     setLoading(true);

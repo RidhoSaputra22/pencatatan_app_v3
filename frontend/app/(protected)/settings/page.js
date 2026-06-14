@@ -16,6 +16,7 @@ import Heading from "@/components/ui/Heading";
 const SETTINGS_HIDDEN_GROUP_IDS = new Set(["recording"]);
 const RUNTIME_PROFILE_KEYS = [
   "EDGE_CONFIG_REFRESH_SECONDS",
+  "CLIENT_POLLING_ENABLED",
   "EDGE_PROCESSING_MAX_FPS",
   "EDGE_STREAM_MAX_FPS",
   "EDGE_STREAM_JPEG_QUALITY",
@@ -29,9 +30,10 @@ const RUNTIME_PROFILES = [
     label: "Video Lokal",
     badgeType: "warning",
     description:
-      "Lebih teliti untuk replay file lokal: proses frame lebih rapat, preview tetap ringan, dan playback berhenti saat file selesai.",
+      "Lebih teliti untuk replay file lokal: proses frame lebih rapat, preview tetap ringan, playback berhenti saat file selesai, dan polling browser dimatikan.",
     values: {
       EDGE_CONFIG_REFRESH_SECONDS: "5",
+      CLIENT_POLLING_ENABLED: "false",
       EDGE_PROCESSING_MAX_FPS: "0",
       EDGE_STREAM_MAX_FPS: "10",
       EDGE_STREAM_JPEG_QUALITY: "70",
@@ -45,9 +47,10 @@ const RUNTIME_PROFILES = [
     label: "Realtime",
     badgeType: "success",
     description:
-      "Lebih ringan untuk live stream: FPS worker dan preview dibatasi agar stabil, sambil menjaga reload config tetap responsif.",
+      "Lebih ringan untuk live stream: FPS worker dan preview dibatasi agar stabil, sambil menjaga reload config dan polling browser tetap responsif.",
     values: {
       EDGE_CONFIG_REFRESH_SECONDS: "15",
+      CLIENT_POLLING_ENABLED: "true",
       EDGE_PROCESSING_MAX_FPS: "12",
       EDGE_STREAM_MAX_FPS: "15",
       EDGE_STREAM_JPEG_QUALITY: "55",

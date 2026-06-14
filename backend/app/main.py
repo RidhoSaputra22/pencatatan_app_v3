@@ -39,6 +39,7 @@ from .stream_relay import (
     get_relay_state,
 )
 from .runtime_config import (
+    load_client_runtime_config,
     RuntimeConfigError,
     load_runtime_config,
     save_runtime_config,
@@ -1331,6 +1332,12 @@ def reset_daily_database(
 def get_runtime_config(_: User = Depends(require_role("ADMIN"))):
     """Read whitelisted runtime configuration from JSON storage."""
     return load_runtime_config()
+
+
+@app.get("/api/runtime-config/client")
+def get_client_runtime_config(_: User = Depends(require_role("ADMIN", "OPERATOR"))):
+    """Read client-safe runtime flags that affect browser polling/refresh behaviour."""
+    return load_client_runtime_config()
 
 
 @app.put("/api/admin/runtime-config")

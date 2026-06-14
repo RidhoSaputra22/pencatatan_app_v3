@@ -8,6 +8,7 @@ import {
   STREAM_RELAY_URL,
   STREAM_RAW_URL,
 } from "@/lib/constants";
+import { useClientRuntimeConfig } from "@/hooks/useClientRuntimeConfig";
 
 /**
  * Default canvas size (matches typical YOLO frame: 1280×720).
@@ -28,6 +29,7 @@ const NATIVE_H = 720;
  * @param {{ points: number[][], onChange: (pts: number[][]) => void }} props
  */
 export default function RoiEditor({ points = [], onChange }) {
+  const { clientPollingEnabled } = useClientRuntimeConfig();
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const imgRef = useRef(null);
@@ -79,7 +81,6 @@ export default function RoiEditor({ points = [], onChange }) {
 
   /* ───────── Stream health check ───────── */
   useEffect(() => {
-    let timer;
     const check = async () => {
       try {
         const edgeResponse = await fetch(STREAM_HEALTH_URL, { cache: "no-store" }).catch(() => null);
@@ -110,9 +111,16 @@ export default function RoiEditor({ points = [], onChange }) {
       }
     };
     check();
-    timer = setInterval(check, STREAM_HEALTH_INTERVAL);
-    return () => clearInterval(timer);
-  }, []);
+    const timer =
+      clientPollingEnabled === true && STREAM_HEALTH_INTERVAL > 0
+        ? window.setInterval(check, STREAM_HEALTH_INTERVAL)
+        : null;
+    return () => {
+      if (timer) {
+        window.clearInterval(timer);
+      }
+    };
+  }, [clientPollingEnabled]);
 
   /* ───────── MJPEG image loader ───────── */
   // Use a hidden <img> element — the browser handles MJPEG multipart

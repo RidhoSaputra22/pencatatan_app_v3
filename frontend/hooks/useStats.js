@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import { fetchSummary, fetchDaily, fetchStatsPerSecond } from "@/services/stats.service";
 import { todayISO, yesterdayISO, formatDate } from "@/lib/utils";
 import { POLL_INTERVAL } from "@/lib/constants";
+import { useClientRuntimeConfig } from "@/hooks/useClientRuntimeConfig";
 
 /**
  * Compute date range for filter presets.
@@ -114,6 +115,7 @@ function computeInsights(totalEvents, yesterdayEvents, hourlyData, totalIn, tota
  * insights, and date filter presets.
  */
 export function useStats() {
+  const { clientPollingEnabled } = useClientRuntimeConfig();
   const [summary, setSummary] = useState(null);
   const [yesterdaySummary, setYesterdaySummary] = useState(null);
   const [daily, setDaily] = useState([]);
@@ -196,9 +198,16 @@ export function useStats() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, POLL_INTERVAL);
-    return () => clearInterval(t);
   }, [load]);
+
+  useEffect(() => {
+    if (clientPollingEnabled !== true || !POLL_INTERVAL) {
+      return undefined;
+    }
+
+    const timerId = window.setInterval(load, POLL_INTERVAL);
+    return () => window.clearInterval(timerId);
+  }, [clientPollingEnabled, load]);
 
   const totalEvents = summary?.total_events ?? daily.reduce((s, r) => s + r.total_events, 0);
   const uniqueVisitors = summary?.unique_visitors ?? daily.reduce((s, r) => s + r.unique_visitors, 0);
@@ -254,6 +263,7 @@ export function useStats() {
     changePercents,
     insights,
     lastUpdatedAt,
+    clientPollingEnabled,
     error,
     reload: load,
     filterMode,

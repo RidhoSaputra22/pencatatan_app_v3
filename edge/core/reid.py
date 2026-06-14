@@ -35,12 +35,12 @@ _visitor_aliases: Dict[str, str] = {}          # provisional/raw key -> canonica
 _current_date: str = ""
 
 
-def reset_daily_cache(date_str: str):
-    """Reset daily embedding cache jika hari berubah."""
+def reset_daily_cache(date_str: str, force: bool = False, reason: str = ""):
+    """Reset daily embedding cache jika hari berubah atau saat dipaksa."""
     global _embedding_cache
     global _daily_embeddings, _daily_embedding_counts, _current_date
     global _daily_keys, _daily_matrix, _daily_matrix_dirty, _visitor_aliases
-    if date_str != _current_date:
+    if force or date_str != _current_date:
         _embedding_cache = {}
         _daily_embeddings = {}
         _daily_embedding_counts = {}
@@ -49,7 +49,13 @@ def reset_daily_cache(date_str: str):
         _daily_matrix_dirty = False
         _visitor_aliases = {}
         _current_date = date_str
-        log.info("Reset daily embedding cache for %s", date_str)
+        if force:
+            if reason:
+                log.info("Force-reset daily embedding cache for %s (%s)", date_str, reason)
+            else:
+                log.info("Force-reset daily embedding cache for %s", date_str)
+        else:
+            log.info("Reset daily embedding cache for %s", date_str)
 
 
 def _normalize_embedding(embedding: Optional[np.ndarray]) -> Optional[np.ndarray]:

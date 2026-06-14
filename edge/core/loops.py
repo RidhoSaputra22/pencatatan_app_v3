@@ -1440,6 +1440,23 @@ def real_loop():
     backup_recorder = _build_backup_recorder()
     stopped_local_file_source = ""
 
+    def _reset_identity_state(date_str: str, *, reason: str) -> None:
+        nonlocal tracker, tracker_mode
+        nonlocal visitor_states, visitor_flow_states
+        nonlocal recent_lost_tracks, track_identity_aliases, last_event_time
+        nonlocal current_date
+
+        visitor_states = {}
+        visitor_flow_states = {}
+        recent_lost_tracks = {}
+        track_identity_aliases = {}
+        last_event_time = {}
+        current_date = date_str
+        reset_daily_cache(date_str, force=True, reason=reason)
+        face_recognizer.reset_daily()
+        tracker, tracker_mode = _build_tracker()
+        log.info("%s — reset visitor tracking, face cache, and ReID cache", reason)
+
     # Processing cadence is independent from stream cadence; the stream layer can
     # duplicate the latest annotated frame between inference updates.
     target_frame_time = 1.0 / EDGE_PROCESSING_MAX_FPS if EDGE_PROCESSING_MAX_FPS > 0 else 0.0
@@ -1541,8 +1558,7 @@ def real_loop():
                 last_frame_id = 0
                 events_enabled = base_events_enabled
                 local_file_events_consumed = False
-                recent_lost_tracks = {}
-                track_identity_aliases = {}
+                _reset_identity_state(today, reason=f"stream source changed to {stream_url}")
                 backup_recorder.reset(reason="stream source changed")
 
             if cap is None or not cap.isOpened():
@@ -1583,13 +1599,7 @@ def real_loop():
 
                     if is_local_file and EDGE_LOCAL_FILE_STOP_ON_END:
                         stopped_local_file_source = stream_url
-                        visitor_states = {}
-                        visitor_flow_states = {}
-                        recent_lost_tracks = {}
-                        track_identity_aliases = {}
-                        last_event_time = {}
-                        face_recognizer.reset_daily()
-                        tracker, tracker_mode = _build_tracker()
+                        _reset_identity_state(today, reason=f"local file ended for {stream_url}")
                         events_enabled = base_events_enabled
                         local_file_events_consumed = False
                         backup_recorder.reset(reason="local file ended (stop on end)")
@@ -1612,13 +1622,7 @@ def real_loop():
 
                     if is_local_file and events_enabled:
                         if EDGE_LOCAL_FILE_REPLAY_POST_EVENTS:
-                            visitor_states = {}
-                            visitor_flow_states = {}
-                            recent_lost_tracks = {}
-                            track_identity_aliases = {}
-                            last_event_time = {}
-                            face_recognizer.reset_daily()
-                            tracker, tracker_mode = _build_tracker()
+                            _reset_identity_state(today, reason=f"local file replay restart for {stream_url}")
                             local_file_events_consumed = False
                             log.info(
                                 "Local video source finished once; restarting with event posting enabled"

@@ -167,3 +167,6 @@ revisi.txt
 !frontend/components/recordings/RecordingLibrary.js
 
 rstp/*.txt
+
+.cctv_recording_*
+simulate_may_*

@@ -72,6 +72,14 @@ CONFIG_ITEMS: List[Dict[str, Any]] = [
         "help": "Interval edge worker mengambil config kamera dan runtime.",
     },
     {
+        "key": "CLIENT_POLLING_ENABLED",
+        "group": "stream",
+        "label": "Polling otomatis browser",
+        "type": "bool",
+        "default": "true",
+        "help": "Jika nonaktif, browser hanya memuat data awal lalu berhenti auto-refresh sampai user menekan muat ulang atau membuka ulang halaman.",
+    },
+    {
         "key": "EDGE_PROCESSING_MAX_FPS",
         "group": "stream",
         "label": "FPS proses YOLO",
@@ -711,6 +719,7 @@ CONFIG_ITEMS: List[Dict[str, Any]] = [
 CONFIG_HINTS: Dict[str, str] = {
     "EDGE_STREAM_URL": "Sumber frame yang dibaca edge worker. Jika kosong, worker memakai stream kamera dari database saat EDGE_STREAM_URL tidak diset. Jika path/URL salah, deteksi berhenti karena tidak ada frame. Sumber resolusi tinggi atau jaringan lambat menaikkan latency dan beban decode.",
     "EDGE_CONFIG_REFRESH_SECONDS": "Interval worker mengambil konfigurasi kamera, ROI, registry, dan runtime config. Nilai terlalu tinggi membuat perubahan panel lambat aktif. Nilai terlalu rendah menambah request ke backend dan bisa membuat log/API lebih ramai.",
+    "CLIENT_POLLING_ENABLED": "Mengatur apakah dashboard, status stream, dan daftar rekaman di browser melakukan polling otomatis. Jika dimatikan, request berkala dari browser berhenti sehingga beban backend lebih ringan, tetapi update data baru perlu tombol muat ulang atau refresh halaman.",
     "EDGE_PROCESSING_MAX_FPS": "Batas FPS untuk inferensi YOLO dan tracking. Terlalu tinggi membuat CPU/GPU berat, suhu naik, dan frame bisa antre. Terlalu rendah membuat bbox lambat mengikuti objek dan gerakan cepat lebih mudah terlewat.",
     "EDGE_STREAM_MAX_FPS": "Batas FPS preview WebRTC/MJPEG ke browser. Terlalu tinggi menaikkan bandwidth dan beban browser. Terlalu rendah hanya membuat preview patah-patah, tetapi tidak selalu menurunkan akurasi deteksi.",
     "EDGE_STREAM_JPEG_QUALITY": "Kualitas kompresi MJPEG preview. Nilai tinggi membuat gambar lebih jelas untuk cek ROI, tetapi bandwidth dan CPU encoding naik. Nilai rendah membuat artefak kompresi dan preview sulit dibaca.",
@@ -798,6 +807,10 @@ def _item_value(item: Dict[str, Any], stored_values: Dict[str, str]) -> str:
         if key in stored_values:
             return stored_values[key]
     return str(item.get("default", ""))
+
+
+def _is_truthy(value: Any) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _format_number(value: float) -> str:
@@ -924,6 +937,20 @@ def load_runtime_config() -> Dict[str, Any]:
         "groups": CONFIG_GROUPS,
         "items": items,
         "values": values,
+    }
+
+
+def load_client_runtime_config() -> Dict[str, Any]:
+    stored_values = _read_config_values()
+    config_mtime = CONFIG_PATH.stat().st_mtime if CONFIG_PATH.exists() else None
+    polling_item = CONFIG_BY_KEY["CLIENT_POLLING_ENABLED"]
+    polling_value = _item_value(polling_item, stored_values)
+    return {
+        "config_mtime": config_mtime,
+        "values": {
+            "CLIENT_POLLING_ENABLED": polling_value,
+        },
+        "client_polling_enabled": _is_truthy(polling_value),
     }
 
 

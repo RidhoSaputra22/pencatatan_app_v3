@@ -35,6 +35,7 @@ export default function DashboardPage() {
     changePercents,
     insights,
     lastUpdatedAt,
+    clientPollingEnabled,
     error,
     reload,
     filterMode,
@@ -166,6 +167,11 @@ export default function DashboardPage() {
                 </span>
                 Live
               </span>
+              {clientPollingEnabled === false && (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-warning/10 px-3 py-1 text-xs font-bold text-warning">
+                  Auto Refresh Off
+                </span>
+              )}
             </div>
             <p className="text-sm text-base-content/50">
               Pantau aktivitas pengunjung secara real-time
@@ -173,6 +179,15 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex items-center gap-4">
+            <Button
+              variant="ghost"
+              outline
+              size="sm"
+              isSubmit={false}
+              onClick={reload}
+            >
+              Muat Ulang
+            </Button>
             {lastUpdatedAt && (
               <div className="flex items-center gap-2 text-xs text-base-content/50 bg-base-200/50 px-3 py-1.5 rounded-full">
                 <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse"></span>

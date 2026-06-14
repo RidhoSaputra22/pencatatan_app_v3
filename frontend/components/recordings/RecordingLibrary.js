@@ -9,6 +9,7 @@ import Heading from "@/components/ui/Heading";
 import Section from "@/components/ui/Section";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
+import { useClientRuntimeConfig } from "@/hooks/useClientRuntimeConfig";
 import { API_BASE } from "@/lib/constants";
 import {
   deleteRecording,
@@ -404,6 +405,7 @@ function RecordingOptionCard({
 export default function RecordingLibrary() {
   const { user, loading: authLoading } = useAuth();
   const { showToast } = useToast();
+  const { clientPollingEnabled } = useClientRuntimeConfig();
   const isAdmin = user?.role === "ADMIN";
   const [recordings, setRecordings] = useState([]);
   const [selectedFilename, setSelectedFilename] = useState("");
@@ -480,12 +482,19 @@ export default function RecordingLibrary() {
   useEffect(() => {
     loadRecordings();
 
-    const timer = window.setInterval(() => {
-      loadRecordings({ silent: true });
-    }, AUTO_REFRESH_MS);
+    const timer =
+      clientPollingEnabled === true && AUTO_REFRESH_MS > 0
+        ? window.setInterval(() => {
+            loadRecordings({ silent: true });
+          }, AUTO_REFRESH_MS)
+        : null;
 
-    return () => window.clearInterval(timer);
-  }, []);
+    return () => {
+      if (timer) {
+        window.clearInterval(timer);
+      }
+    };
+  }, [clientPollingEnabled]);
 
   useEffect(() => {
     if (authLoading) return;

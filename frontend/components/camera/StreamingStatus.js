@@ -5,12 +5,14 @@ import { fetchStreamRelayHealth } from "@/services/camera.service";
 import Section from "@/components/ui/Section";
 import Badge from "@/components/ui/Badge";
 import Alert from "@/components/ui/Alert";
+import { useClientRuntimeConfig } from "@/hooks/useClientRuntimeConfig";
 
 /**
  * Shows the status of the UDP stream relay.
  * Indicates whether a client is streaming CCTV footage to the server.
  */
 export default function StreamingStatus() {
+  const { clientPollingEnabled } = useClientRuntimeConfig();
   const [status, setStatus] = useState(null);
   const [error, setError] = useState("");
 
@@ -33,12 +35,15 @@ export default function StreamingStatus() {
     }
 
     check();
-    const interval = setInterval(check, 5000);
+    const interval =
+      clientPollingEnabled === true ? window.setInterval(check, 5000) : null;
     return () => {
       active = false;
-      clearInterval(interval);
+      if (interval) {
+        window.clearInterval(interval);
+      }
     };
-  }, []);
+  }, [clientPollingEnabled]);
 
   const isReceiving = status?.has_frame === true;
   const isWaiting = status && !status.has_frame;
