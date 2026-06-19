@@ -345,6 +345,14 @@ REID_STRONG_MATCH_THRESHOLD = env_float(
 )
 REID_AMBIGUITY_MARGIN = max(0.0, env_float("REID_AMBIGUITY_MARGIN", reid_default_ambiguity_margin))
 REID_PROTOTYPE_ALPHA = min(1.0, max(0.01, env_float("REID_PROTOTYPE_ALPHA", reid_default_prototype_alpha)))
+REID_FRAME_INTERVAL = max(1, env_int("REID_FRAME_INTERVAL", 3))
+REID_MIN_CROP_WIDTH = max(8, env_int("REID_MIN_CROP_WIDTH", 32))
+REID_MIN_CROP_HEIGHT = max(8, env_int("REID_MIN_CROP_HEIGHT", 64))
+REID_CROP_PADDING_RATIO = min(0.5, max(0.0, env_float("REID_CROP_PADDING_RATIO", 0.08)))
+REID_STITCH_MATCH_THRESHOLD = min(
+    1.0,
+    max(0.0, env_float("REID_STITCH_MATCH_THRESHOLD", max(REID_MATCH_THRESHOLD, 0.82))),
+)
 
 # Face recognition configuration
 FACE_RECOGNITION_ENABLED = env_bool_alias(("WITH_FACE_RECOGNITION", "FACE_RECOGNITION_ENABLED"), False)

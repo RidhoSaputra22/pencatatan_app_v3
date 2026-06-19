@@ -332,7 +332,14 @@ def _finalize_stale_track(cache: Dict[str, Any]) -> None:
     _bind_track_as_new(cache)
 
 
-def update_track_identity(track_id: int, embedding: np.ndarray, camera_id: int, date_str: str) -> Dict[str, Any]:
+def update_track_identity(
+    track_id: int,
+    embedding: np.ndarray,
+    camera_id: int,
+    date_str: str,
+    *,
+    embedding_fresh: bool = True,
+) -> Dict[str, Any]:
     """
     Update atau create embedding untuk track.
     Returns metadata identity yang lebih kaya daripada sekadar visitor_key.
@@ -353,7 +360,8 @@ def update_track_identity(track_id: int, embedding: np.ndarray, camera_id: int, 
         cache["match_margin"] = None
         return _serialize_identity(cache)
 
-    _refresh_track_average(cache, normalized)
+    if embedding_fresh or cache.get("embedding") is None:
+        _refresh_track_average(cache, normalized)
     averaged_embedding = cache.get("embedding")
     if averaged_embedding is None:
         cache["visitor_key"] = cache.get("fallback_key", cache.get("visitor_key"))
@@ -376,11 +384,13 @@ def update_track_identity(track_id: int, embedding: np.ndarray, camera_id: int, 
             cache["reid_source"] = cache.get("reid_source", "matched_existing")
             cache["match_similarity"] = match["similarity"]
             cache["match_margin"] = match["margin"]
-            _update_daily_embedding(cache["visitor_key"], averaged_embedding)
+            if embedding_fresh:
+                _update_daily_embedding(cache["visitor_key"], averaged_embedding)
         return _serialize_identity(cache)
 
     if cache.get("identity_status") == "CONFIRMED":
-        _update_daily_embedding(cache["visitor_key"], averaged_embedding)
+        if embedding_fresh:
+            _update_daily_embedding(cache["visitor_key"], averaged_embedding)
         return _serialize_identity(cache)
 
     if enough_samples:

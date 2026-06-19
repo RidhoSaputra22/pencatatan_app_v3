@@ -19,7 +19,7 @@ const DEFAULT_ROI = [
  * Uses the interactive RoiEditor with live camera feed.
  */
 export default function CountingAreaForm({ areas = [], onSaved }) {
-  const { showToast } = useToast();
+  const { showToast } = useToast(); 
   const [areaName, setAreaName] = useState("");
   const [roiPoints, setRoiPoints] = useState(DEFAULT_ROI);
   const [directionMode, setDirectionMode] = useState("BOTH");

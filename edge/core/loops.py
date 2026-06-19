@@ -16,6 +16,7 @@ from .api_client import (
     send_current_presence,
     send_visitor_event,
 )
+from . import body_reid as body_reid_module
 from . import capture as capture_module
 from . import config as config_module
 from . import detection as detection_module
@@ -48,6 +49,11 @@ from .config import (
     IDENTITY_MODE,
     IMG_SIZE,
     POST_INTERVAL,
+    REID_CROP_PADDING_RATIO,
+    REID_FRAME_INTERVAL,
+    REID_MIN_CROP_HEIGHT,
+    REID_MIN_CROP_WIDTH,
+    REID_STITCH_MATCH_THRESHOLD,
     TEST_FRAME_HEIGHT,
     TEST_FRAME_STEP,
     TEST_FRAME_WIDTH,
@@ -90,6 +96,7 @@ from .config import (
     TRACK_STITCH_RECENT_SECONDS,
     TRACKER_METHOD,
 )
+from .body_reid import BodyReidentifier
 from .detection import load_model, parse_roi, point_in_roi, suppress_duplicate_person_detections
 from .face_recognition import EmployeeFaceRecognizer
 from .logger import get_logger
@@ -559,6 +566,30 @@ def _apply_runtime_config(payload: Dict[str, Any], model: Any) -> Dict[str, Any]
         if previous != parsed:
             changed.append(env_key)
 
+    body_reid_fields = {
+        "REID_FRAME_INTERVAL": ("REID_FRAME_INTERVAL", int, 1, None),
+        "REID_MIN_CROP_WIDTH": ("REID_MIN_CROP_WIDTH", int, 8, None),
+        "REID_MIN_CROP_HEIGHT": ("REID_MIN_CROP_HEIGHT", int, 8, None),
+        "REID_CROP_PADDING_RATIO": ("REID_CROP_PADDING_RATIO", float, 0.0, 0.5),
+        "REID_STITCH_MATCH_THRESHOLD": ("REID_STITCH_MATCH_THRESHOLD", float, 0.0, 1.0),
+    }
+    for env_key, (global_name, value_type, minimum, maximum) in body_reid_fields.items():
+        if env_key not in values:
+            continue
+        default = globals().get(global_name)
+        if value_type is int:
+            parsed = _runtime_int(values[env_key], int(default), minimum=int(minimum))
+        else:
+            parsed = _runtime_float(values[env_key], float(default), minimum=minimum, maximum=maximum)
+        mark(
+            env_key,
+            _set_across_modules(
+                global_name,
+                parsed,
+                (config_module, streaming_module, body_reid_module),
+            ),
+        )
+
     face_fields = {
         "EMPLOYEE_MATCH_THRESHOLD": ("EMPLOYEE_MATCH_THRESHOLD", float, 0.0, 1.0),
         "EMPLOYEE_REGISTRY_REFRESH_SECONDS": ("EMPLOYEE_REGISTRY_REFRESH_SECONDS", int, 1, None),
@@ -725,6 +756,29 @@ def _bbox_iou_local(
     return inter_area / union if union > 0 else 0.0
 
 
+def _normalize_local_embedding(embedding: Optional[np.ndarray]) -> Optional[np.ndarray]:
+    if embedding is None:
+        return None
+    vector = np.asarray(embedding, dtype=np.float32).reshape(-1)
+    if vector.size == 0:
+        return None
+    norm = float(np.linalg.norm(vector))
+    if norm <= 0:
+        return None
+    return vector / norm
+
+
+def _embedding_similarity_local(
+    embedding_a: Optional[np.ndarray],
+    embedding_b: Optional[np.ndarray],
+) -> Optional[float]:
+    normalized_a = _normalize_local_embedding(embedding_a)
+    normalized_b = _normalize_local_embedding(embedding_b)
+    if normalized_a is None or normalized_b is None:
+        return None
+    return float(np.clip(normalized_a @ normalized_b, -1.0, 1.0))
+
+
 def _same_spatial_region(
     bbox_a: Tuple[float, float, float, float],
     bbox_b: Tuple[float, float, float, float],
@@ -756,6 +810,8 @@ _STITCH_STATE_KEYS = (
     "recognition_source",
     "identity_status",
     "identity_samples",
+    "identity_embedding",
+    "identity_backend",
     "pending_entry",
     "entry_logged",
     "entry_suppressed",
@@ -825,13 +881,22 @@ def _remember_recent_lost_track(
     ):
         return
 
+    saved_state: Dict[str, Any] = {}
+    for key in _STITCH_STATE_KEYS:
+        if key not in state:
+            continue
+        value = state.get(key)
+        if isinstance(value, np.ndarray):
+            value = value.copy()
+        saved_state[key] = value
+
     recent_lost_tracks[track_id] = {
         "track_id": track_id,
         "visitor_key": visitor_key,
         "last_bbox": tuple(float(v) for v in last_bbox),
         "last_seen_ts": float(state.get("last_seen_ts", now_ts) or now_ts),
         "stored_ts": now_ts,
-        "state": {key: state.get(key) for key in _STITCH_STATE_KEYS if key in state},
+        "state": saved_state,
     }
 
 
@@ -872,8 +937,9 @@ def _find_recent_lost_track_match(
     current_bbox: Tuple[float, float, float, float],
     classification: Dict[str, Any],
     now_ts: float,
+    current_embedding: Optional[np.ndarray] = None,
 ) -> Optional[Dict[str, Any]]:
-    if not TRACK_STITCH_ENABLED or IDENTITY_MODE != "track":
+    if not TRACK_STITCH_ENABLED or IDENTITY_MODE not in {"track", "reid"}:
         return None
     if classification.get("person_type") == "EMPLOYEE":
         return None
@@ -890,6 +956,14 @@ def _find_recent_lost_track_match(
             continue
 
         score = _track_stitch_score(current_bbox, tuple(previous_bbox), age_seconds)
+        if IDENTITY_MODE == "reid":
+            previous_embedding = (snapshot.get("state") or {}).get("identity_embedding")
+            similarity = _embedding_similarity_local(current_embedding, previous_embedding)
+            if similarity is None or similarity < REID_STITCH_MATCH_THRESHOLD:
+                continue
+            if score is None:
+                continue
+            score += max(0.0, 1.0 - similarity)
         if score is not None and score < best_score:
             best_score = score
             best_snapshot = snapshot
@@ -1313,13 +1387,43 @@ def _build_backup_recorder() -> SegmentedVideoRecorder:
     return recorder
 
 
-def _resolve_identity_embedding(face_recognizer: EmployeeFaceRecognizer, track) -> Optional[np.ndarray]:
+def _resolve_identity_embedding(
+    face_recognizer: EmployeeFaceRecognizer,
+    body_reidentifier: BodyReidentifier,
+    frame: np.ndarray,
+    track_id: int,
+    track,
+    *,
+    frame_id: int = 0,
+    tracker_mode: str = "",
+) -> Dict[str, Any]:
     mode = IDENTITY_MODE
     if mode == "face":
-        return face_recognizer.extract_track_face_embedding(track.bbox)
+        embedding = face_recognizer.extract_track_face_embedding(track.bbox)
+        return {
+            "embedding": embedding,
+            "fresh": embedding is not None,
+            "backend": "face_embedding",
+        }
     if mode == "reid":
-        return getattr(track, "embedding", None)
-    return None
+        track_embedding = getattr(track, "embedding", None)
+        if track_embedding is not None and tracker_mode == "DeepSORT+ReID":
+            return {
+                "embedding": np.asarray(track_embedding, dtype=np.float32),
+                "fresh": True,
+                "backend": "deepsort_track",
+            }
+        return body_reidentifier.extract_track_embedding(
+            frame,
+            track_id,
+            track.bbox,
+            frame_id=frame_id,
+        )
+    return {
+        "embedding": None,
+        "fresh": False,
+        "backend": "track_id",
+    }
 
 
 def _build_output_writer(stream_url: str, frame: np.ndarray, source_fps: float):
@@ -1411,6 +1515,7 @@ def real_loop():
     _apply_runtime_config(startup_runtime_config, None)
     model = load_model()
     face_recognizer = EmployeeFaceRecognizer()
+    body_reidentifier = BodyReidentifier()
     _apply_runtime_config(startup_runtime_config, model)
     _apply_yolo_thresholds(model, _effective_detector_conf(), detection_module.IOU_TH)
 
@@ -1435,14 +1540,21 @@ def real_loop():
         )
 
     tracker, tracker_mode = _build_tracker()
-    if IDENTITY_MODE == "reid" and tracker_mode != "DeepSORT+ReID":
-        log.warning(
-            "IDENTITY_MODE=reid berjalan di %s. "
-            "Embedding ReID tidak tersedia, visitor_key fallback ke track-id, "
-            "dan hitungan unik bisa membengkak saat stream relay tidak stabil."
-            " Gunakan IDENTITY_MODE=track untuk ByteTrack/Centroid atau pilih DeepSORT+ReID.",
-            tracker_mode,
-        )
+    if IDENTITY_MODE == "reid":
+        reid_status = body_reidentifier.describe()
+        if tracker_mode == "DeepSORT+ReID":
+            log.info("Body ReID active: tracker=%s | external_backend=%s", tracker_mode, reid_status["backend"])
+        else:
+            log.info(
+                "IDENTITY_MODE=reid berjalan di %s dengan external body ReID backend=%s",
+                tracker_mode,
+                reid_status["backend"],
+            )
+            if reid_status.get("backend") == "appearance_fallback":
+                log.warning(
+                    "Centroid/ByteTrack ReID sedang memakai appearance fallback. "
+                    "Mode ini tetap tracker-agnostic, tetapi lebih sensitif terhadap pakaian mirip dan occlusion panjang."
+                )
 
     last_cfg_fetch = 0.0
     roi = None
@@ -1484,8 +1596,9 @@ def real_loop():
         current_date = date_str
         reset_daily_cache(date_str, force=True, reason=reason)
         face_recognizer.reset_daily()
+        body_reidentifier.reset_daily()
         tracker, tracker_mode = _build_tracker()
-        log.info("%s — reset visitor tracking, face cache, and ReID cache", reason)
+        log.info("%s — reset visitor tracking, face cache, body ReID cache, and ReID cache", reason)
 
     # Processing cadence is independent from stream cadence; the stream layer can
     # duplicate the latest annotated frame between inference updates.
@@ -1506,9 +1619,10 @@ def real_loop():
                 current_date = today
                 reset_daily_cache(today)
                 face_recognizer.reset_daily()
+                body_reidentifier.reset_daily()
                 for _, track in tracker.tracks.items():
                     track.in_roi = False
-                log.info("New day: %s — reset visitor tracking + face cache", today)
+                log.info("New day: %s — reset visitor tracking + face/body identity cache", today)
 
             if now_ts - last_cfg_fetch > CONFIG_REFRESH or last_cfg_fetch == 0:
                 if needs_backend_auth and token is None:
@@ -1520,6 +1634,7 @@ def real_loop():
                     visitor_states = {}
                     recent_lost_tracks = {}
                     track_identity_aliases = {}
+                    body_reidentifier.reset_daily()
                     log.info("Tracker rebuilt after runtime config update (%s)", tracker_mode)
                 if runtime_apply.get("recording_rebuild"):
                     backup_recorder.close()
@@ -1753,6 +1868,7 @@ def real_loop():
             active_track_ids = list(tracks.keys())
             cleanup_old_tracks(active_track_ids)
             face_recognizer.cleanup(active_track_ids)
+            body_reidentifier.cleanup(active_track_ids)
 
             # Face recognition is the second-heaviest stage after YOLO, so only refresh
             # the batch detector while it is useful for employee classification or face identity mode.
@@ -2002,6 +2118,8 @@ def real_loop():
                         "visitor_key": "",
                         "person_type": "UNKNOWN",
                         "identity_status": "PENDING",
+                        "identity_embedding": None,
+                        "identity_backend": "",
                         "pending_entry": False,
                         "entry_logged": False,
                         "entry_suppressed": False,
@@ -2025,17 +2143,37 @@ def real_loop():
                 if detected_now:
                     point_x, point_y = _track_counting_point(track)
                     in_roi_now = point_in_roi(roi, point_x, point_y)
-                    identity_embedding = _resolve_identity_embedding(face_recognizer, track)
-                    identity = update_track_identity(track_id, identity_embedding, CAMERA_ID, today)
+                    identity_sample = _resolve_identity_embedding(
+                        face_recognizer,
+                        body_reidentifier,
+                        frame,
+                        track_id,
+                        track,
+                        frame_id=last_frame_id,
+                        tracker_mode=tracker_mode_runtime,
+                    )
+                    identity_embedding = identity_sample.get("embedding")
+                    identity = update_track_identity(
+                        track_id,
+                        identity_embedding,
+                        CAMERA_ID,
+                        today,
+                        embedding_fresh=bool(identity_sample.get("fresh")),
+                    )
                     classification = face_recognizer.classify_track(frame, track_id, track.bbox)
                     visitor_key = _stable_identity_key(identity["visitor_key"], classification)
-                    if IDENTITY_MODE == "track" and track_id in track_identity_aliases:
-                        visitor_key = track_identity_aliases[track_id]
+                    if IDENTITY_MODE in {"track", "reid"} and track_id in track_identity_aliases:
+                        if IDENTITY_MODE == "track" or identity.get("identity_status") != "CONFIRMED":
+                            visitor_key = track_identity_aliases[track_id]
+                        elif track_identity_aliases.get(track_id) == visitor_key:
+                            visitor_key = track_identity_aliases[track_id]
+                        else:
+                            track_identity_aliases.pop(track_id, None)
 
                     is_fresh_track_state = int(state.get("seen_frames", 0) or 0) == 0
                     if (
                         is_fresh_track_state
-                        and IDENTITY_MODE == "track"
+                        and IDENTITY_MODE in {"track", "reid"}
                         and not state.get("visitor_key")
                     ):
                         stitch_match = _find_recent_lost_track_match(
@@ -2043,6 +2181,7 @@ def real_loop():
                             tuple(track.bbox),
                             classification,
                             now_ts,
+                            identity_embedding,
                         )
                         if stitch_match and stitch_match.get("visitor_key"):
                             _restore_stitched_state(state, stitch_match)
@@ -2103,6 +2242,8 @@ def real_loop():
                             "recognition_source": classification.get("recognition_source"),
                             "identity_status": identity.get("identity_status", "PENDING"),
                             "identity_samples": identity.get("embedding_samples", 0),
+                            "identity_embedding": _normalize_local_embedding(identity_embedding),
+                            "identity_backend": identity_sample.get("backend", ""),
                             "previous_centroid": previous_centroid,
                             "last_bbox": tuple(track.bbox),
                             "last_centroid": tuple(track.centroid),
