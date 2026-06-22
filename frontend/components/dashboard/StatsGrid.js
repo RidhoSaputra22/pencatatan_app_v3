@@ -22,7 +22,7 @@ function ChangeBadge({ value }) {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" />
         </svg>
       )}
-      {isUp ? "+" : ""}{value}% Hari Ini
+      {isUp ? "+" : ""}{value}%
     </span>
   );
 }
@@ -52,7 +52,7 @@ const KPI_CONFIG = [
   {
     key: "totalEvents",
     label: "Total Aktivitas",
-    sub: "Masuk  + keluar",
+    sub: "Masuk + keluar",
     gradient: "from-primary/10 to-primary/5",
     borderColor: "border-l-primary",
     valueColor: "text-primary",
@@ -82,7 +82,7 @@ const KPI_CONFIG = [
   {
     key: "totalOut",
     label: "Pengunjung Keluar",
-    sub: "Total keluar hari ini",
+    sub: "Total keluar pada periode ini",
     gradient: "from-error/10 to-error/5",
     borderColor: "border-l-error",
     valueColor: "text-error",
@@ -97,7 +97,7 @@ const KPI_CONFIG = [
   {
     key: "currentInside",
     label: "Di Dalam Ruangan",
-    sub: "Pengunjung yang masih aktif di area",
+    sub: "Pengunjung terdeteksi pada akhir periode",
     gradient: "from-warning/10 to-warning/5",
     borderColor: "border-l-warning",
     valueColor: "text-warning",

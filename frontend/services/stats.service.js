@@ -10,8 +10,16 @@ export function fetchMe() {
 /**
  * GET /api/stats/summary?day=YYYY-MM-DD
  */
-export function fetchSummary(day) {
-  return get(`/api/stats/summary?day=${day}`);
+export function fetchSummary(day, options = {}) {
+  const params = new URLSearchParams();
+  if (day) params.set("day", day);
+  if (options.fromDateTime) {
+    params.set("from_datetime", options.fromDateTime);
+  }
+  if (options.toDateTime) {
+    params.set("to_datetime", options.toDateTime);
+  }
+  return get(`/api/stats/summary?${params.toString()}`);
 }
 
 /**
@@ -20,11 +28,20 @@ export function fetchSummary(day) {
  * @param {string} fromDate - start of range
  * @param {string} toDate - end of range
  */
-export function fetchDaily(day, fromDate, toDate) {
+export function fetchDaily(day, fromDate, toDate, options = {}) {
+  const params = new URLSearchParams();
+  if (day) params.set("day", day);
   if (fromDate && toDate) {
-    return get(`/api/stats/daily?from_date=${fromDate}&to_date=${toDate}`);
+    params.set("from_date", fromDate);
+    params.set("to_date", toDate);
   }
-  return get(`/api/stats/daily?day=${day}`);
+  if (options.fromDateTime) {
+    params.set("from_datetime", options.fromDateTime);
+  }
+  if (options.toDateTime) {
+    params.set("to_datetime", options.toDateTime);
+  }
+  return get(`/api/stats/daily?${params.toString()}`);
 }
 
 /**
@@ -56,10 +73,16 @@ export function fetchEvents(fromDate, toDate, options = {}) {
  * @param {string} day - format YYYY-MM-DD
  * @param {number} cameraId - optional
  */
-export function fetchStatsPerSecond(day, cameraId) {
-  let url = `/api/stats/per_second?day=${day}`;
-  if (cameraId) url += `&camera_id=${cameraId}`;
-  return get(url);
+export function fetchStatsPerSecond(day, cameraId, options = {}) {
+  const params = new URLSearchParams({ day });
+  if (cameraId) params.set("camera_id", String(cameraId));
+  if (options.fromDateTime) {
+    params.set("from_datetime", options.fromDateTime);
+  }
+  if (options.toDateTime) {
+    params.set("to_datetime", options.toDateTime);
+  }
+  return get(`/api/stats/per_second?${params.toString()}`);
 }
 
 /**

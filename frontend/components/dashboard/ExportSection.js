@@ -34,6 +34,8 @@ function cleanupPrintFrame(frame) {
 export default function ExportSection({
   filterFrom,
   filterTo,
+  filterFromDateTime = null,
+  filterToDateTime = null,
   day,
   totalEvents = 0,
   totalIn = 0,
@@ -54,8 +56,18 @@ export default function ExportSection({
     setError("");
     try {
       const token = getToken();
+      const params = new URLSearchParams({
+        from_day: fromDay,
+        to_day: toDay,
+      });
+      if (filterFromDateTime) {
+        params.set("from_datetime", filterFromDateTime);
+      }
+      if (filterToDateTime) {
+        params.set("to_datetime", filterToDateTime);
+      }
       const res = await fetch(
-        `${API_BASE}/api/reports/csv?from_day=${fromDay}&to_day=${toDay}`,
+        `${API_BASE}/api/reports/csv?${params.toString()}`,
         {
           headers: { Authorization: `Bearer ${token}` },
         }
@@ -87,13 +99,9 @@ export default function ExportSection({
     const statsTable = document.querySelector("table");
     const printedAt = formatPrintDateTime();
     const summaryCards = [
+     
       {
-        label: "Total Aktivitas",
-        value: formatNumber(totalEvents),
-        tone: "#2563eb",
-      },
-      {
-        label: "Masuk ",
+        label: "Masuk",
         value: formatNumber(totalIn),
         tone: "#16a34a",
       },
@@ -110,14 +118,14 @@ export default function ExportSection({
         value: insights?.peakHour || "-",
       },
       {
-        label: "Kondisi Hari Ini",
+        label: "Perbandingan Periode",
         value:
           insights?.busyLabel && insights?.busyPercent !== null && insights?.busyPercent !== undefined
             ? `${insights.busyLabel} (${insights.busyPercent > 0 ? "+" : ""}${insights.busyPercent}%)`
             : "-",
       },
       {
-        label: "Rasio Masuk /Keluar",
+        label: "Rasio Masuk/Keluar",
         value: insights?.ratio || "-",
       },
     ].filter((item) => item.value && item.value !== "-");

@@ -306,6 +306,170 @@ def build_period_bounds(
     return start_at, end_at
 
 
+def build_interval_daily_stats_rows(
+    session: Session,
+    *,
+    from_datetime: datetime,
+    to_datetime: datetime,
+    camera_id: Optional[int] = None,
+) -> List[DailyStatsOut]:
+    if from_datetime.date() != to_datetime.date():
+        raise HTTPException(
+            status_code=422,
+            detail="Filter jam dashboard hanya mendukung satu tanggal harian.",
+        )
+
+    target_date = from_datetime.date()
+    non_employee_filter = or_(
+        VisitEvent.person_type == None,
+        VisitEvent.person_type != "EMPLOYEE",
+    )
+
+    interval_visitors = session.exec(
+        select(VisitorDaily).where(
+            VisitorDaily.visit_date == target_date,
+            VisitorDaily.first_seen_at >= from_datetime,
+            VisitorDaily.first_seen_at <= to_datetime,
+        )
+    ).all()
+
+    visitor_keys = [
+        visitor.visitor_key
+        for visitor in interval_visitors
+        if (visitor.visitor_key or "").strip()
+    ]
+    total_in_by_camera: Dict[int, int] = defaultdict(int)
+    if visitor_keys:
+        first_events = session.exec(
+            select(VisitEvent).where(
+                VisitEvent.visitor_key.in_(visitor_keys),
+                VisitEvent.event_time >= from_datetime,
+                VisitEvent.event_time <= to_datetime,
+                non_employee_filter,
+            ).order_by(
+                VisitEvent.visitor_key.asc(),
+                VisitEvent.event_time.asc(),
+                VisitEvent.event_id.asc(),
+            )
+        ).all()
+
+        counted_visitor_keys = set()
+        for event in first_events:
+            visitor_key = (event.visitor_key or "").strip()
+            if not visitor_key or visitor_key in counted_visitor_keys:
+                continue
+
+            total_in_by_camera[event.camera_id] += 1
+            counted_visitor_keys.add(visitor_key)
+
+    out_query = select(VisitEvent).where(
+        VisitEvent.event_time >= from_datetime,
+        VisitEvent.event_time <= to_datetime,
+        VisitEvent.direction == "OUT",
+        non_employee_filter,
+    )
+    if camera_id:
+        out_query = out_query.where(VisitEvent.camera_id == camera_id)
+
+    total_out_by_camera: Dict[int, int] = defaultdict(int)
+    for event in session.exec(out_query).all():
+        total_out_by_camera[event.camera_id] += 1
+
+    camera_ids = set(total_in_by_camera) | set(total_out_by_camera)
+    if camera_id:
+        camera_ids = {camera_id} if camera_id in camera_ids else set()
+
+    return [
+        DailyStatsOut(
+            stat_date=target_date,
+            camera_id=cam_id,
+            total_events=dashboard_total_activity(
+                total_in_by_camera.get(cam_id, 0),
+                total_out_by_camera.get(cam_id, 0),
+            ),
+            unique_visitors=total_in_by_camera.get(cam_id, 0),
+            total_in=total_in_by_camera.get(cam_id, 0),
+            total_out=total_out_by_camera.get(cam_id, 0),
+        )
+        for cam_id in sorted(camera_ids)
+    ]
+
+
+def count_present_visitors_at(
+    session: Session,
+    *,
+    from_datetime: datetime,
+    at_datetime: datetime,
+) -> int:
+    effective_at = min(at_datetime, datetime.now())
+    if from_datetime > effective_at:
+        return 0
+
+    backfill_visitor_minute_presence(
+        session,
+        from_datetime=from_datetime,
+        to_datetime=effective_at,
+    )
+    session.commit()
+
+    snapshot_minute = floor_to_minute(effective_at)
+    visitor_keys = session.exec(
+        select(VisitorMinutePresence.visitor_key).where(
+            VisitorMinutePresence.snapshot_minute == snapshot_minute
+        )
+    ).all()
+
+    return len({visitor_key for visitor_key in visitor_keys if visitor_key})
+
+
+def build_interval_dashboard_summary(
+    session: Session,
+    *,
+    from_datetime: datetime,
+    to_datetime: datetime,
+) -> DashboardSummary:
+    if from_datetime.date() != to_datetime.date():
+        raise HTTPException(
+            status_code=422,
+            detail="Filter jam dashboard hanya mendukung satu tanggal harian.",
+        )
+
+    target_date = from_datetime.date()
+    unique_visitors = int(
+        session.exec(
+            select(func.count()).select_from(VisitorDaily).where(
+                VisitorDaily.visit_date == target_date,
+                VisitorDaily.first_seen_at >= from_datetime,
+                VisitorDaily.first_seen_at <= to_datetime,
+            )
+        ).one() or 0
+    )
+    total_out = int(
+        session.exec(
+            select(func.count()).select_from(VisitEvent).where(
+                VisitEvent.event_time >= from_datetime,
+                VisitEvent.event_time <= to_datetime,
+                VisitEvent.direction == "OUT",
+                or_(VisitEvent.person_type == None, VisitEvent.person_type != "EMPLOYEE"),
+            )
+        ).one() or 0
+    )
+    current_inside = count_present_visitors_at(
+        session,
+        from_datetime=from_datetime,
+        at_datetime=to_datetime,
+    )
+
+    return DashboardSummary(
+        date=target_date,
+        total_events=dashboard_total_activity(unique_visitors, total_out),
+        unique_visitors=unique_visitors,
+        total_in=unique_visitors,
+        total_out=total_out,
+        current_inside=current_inside,
+    )
+
+
 def build_presence_rows(
     *,
     visitor_key: str,
@@ -1589,11 +1753,27 @@ def stats_daily(
     day: Optional[date] = None, 
     from_date: Optional[date] = None,
     to_date: Optional[date] = None,
+    from_datetime: Optional[datetime] = None,
+    to_datetime: Optional[datetime] = None,
     camera_id: Optional[int] = None,
     session: Session = Depends(get_session), 
     _: User = Depends(require_role("ADMIN", "OPERATOR"))
 ):
     """Get daily statistics with optional filters"""
+    if from_datetime or to_datetime:
+        start_at, end_at = build_period_bounds(
+            from_date=day or from_date,
+            to_date=day or to_date or from_date,
+            from_datetime=from_datetime,
+            to_datetime=to_datetime,
+        )
+        return build_interval_daily_stats_rows(
+            session,
+            from_datetime=start_at,
+            to_datetime=end_at,
+            camera_id=camera_id,
+        )
+
     q = select(DailyStats)
     
     if day:
@@ -1618,10 +1798,25 @@ def stats_daily(
 @app.get("/api/stats/summary", response_model=DashboardSummary)
 def stats_summary(
     day: Optional[date] = None,
+    from_datetime: Optional[datetime] = None,
+    to_datetime: Optional[datetime] = None,
     session: Session = Depends(get_session), 
     _: User = Depends(require_role("ADMIN", "OPERATOR"))
 ):
     """Get summary for dashboard (aggregated across all cameras)"""
+    if from_datetime or to_datetime:
+        start_at, end_at = build_period_bounds(
+            from_date=day,
+            to_date=day,
+            from_datetime=from_datetime,
+            to_datetime=to_datetime,
+        )
+        return build_interval_dashboard_summary(
+            session,
+            from_datetime=start_at,
+            to_datetime=end_at,
+        )
+
     target_date = day or date.today()
     
     stats = session.exec(
@@ -1650,6 +1845,8 @@ def stats_summary(
 def report_csv(
     from_day: date, 
     to_day: date, 
+    from_datetime: Optional[datetime] = None,
+    to_datetime: Optional[datetime] = None,
     camera_id: Optional[int] = None,
     session: Session = Depends(get_session), 
     _: User = Depends(require_role("ADMIN", "OPERATOR"))
@@ -1659,25 +1856,48 @@ def report_csv(
     
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(["Tanggal", "Camera ID", "Total Aktivitas", "Pengunjung ", "Masuk ", "Keluar"])
-    
-    q = select(DailyStats).where(
-        DailyStats.stat_date >= from_day, 
-        DailyStats.stat_date <= to_day
-    )
-    if camera_id:
-        q = q.where(DailyStats.camera_id == camera_id)
-    
-    rows = session.exec(q.order_by(DailyStats.stat_date)).all()
-    for r in rows:
-        writer.writerow([
-            r.stat_date.isoformat(), 
-            r.camera_id, 
-            dashboard_total_activity(r.unique_visitors, r.total_out),
-            r.unique_visitors, 
-            r.unique_visitors,
-            r.total_out
-        ])
+    writer.writerow(["Tanggal", "Camera ID", "Total Aktivitas", "Pengunjung", "Masuk", "Keluar"])
+
+    if from_datetime or to_datetime:
+        start_at, end_at = build_period_bounds(
+            from_date=from_day,
+            to_date=to_day,
+            from_datetime=from_datetime,
+            to_datetime=to_datetime,
+        )
+        rows = build_interval_daily_stats_rows(
+            session,
+            from_datetime=start_at,
+            to_datetime=end_at,
+            camera_id=camera_id,
+        )
+        for row in rows:
+            writer.writerow([
+                row.stat_date.isoformat(),
+                row.camera_id,
+                row.total_events,
+                row.unique_visitors,
+                row.total_in,
+                row.total_out,
+            ])
+    else:
+        q = select(DailyStats).where(
+            DailyStats.stat_date >= from_day, 
+            DailyStats.stat_date <= to_day
+        )
+        if camera_id:
+            q = q.where(DailyStats.camera_id == camera_id)
+        
+        rows = session.exec(q.order_by(DailyStats.stat_date)).all()
+        for r in rows:
+            writer.writerow([
+                r.stat_date.isoformat(), 
+                r.camera_id, 
+                dashboard_total_activity(r.unique_visitors, r.total_out),
+                r.unique_visitors, 
+                r.unique_visitors,
+                r.total_out
+            ])
     
     out.seek(0)
     filename = f"laporan_pengunjung_{from_day}_{to_day}.csv"
@@ -2006,14 +2226,24 @@ def update_runtime_config(
 @app.get("/api/stats/per_second")
 def stats_per_second(
     day: date = Query(..., description="Tanggal (YYYY-MM-DD)"),
+    from_datetime: Optional[datetime] = Query(None),
+    to_datetime: Optional[datetime] = Query(None),
     camera_id: Optional[int] = Query(None),
     session: Session = Depends(get_session),
     _: User = Depends(require_role("ADMIN", "OPERATOR"))
 ):
     """Statistik aktivitas per detik: masuk  + keluar."""
-    day_str = day.isoformat()
+    start_at, end_at = build_period_bounds(
+        from_date=day,
+        to_date=day,
+        from_datetime=from_datetime,
+        to_datetime=to_datetime,
+    )
 
-    params = {"day_start": f"{day_str} 00:00:00", "day_end": f"{day_str} 23:59:59"}
+    params = {
+        "day_start": start_at.strftime("%Y-%m-%d %H:%M:%S"),
+        "day_end": end_at.strftime("%Y-%m-%d %H:%M:%S"),
+    }
     camera_filter = ""
     if camera_id:
         camera_filter = " AND camera_id = :camera_id"

@@ -23,24 +23,43 @@ export default function DashboardPage() {
     day,
     today,
     daily,
-    perSecond,
     hourlyData,
     totalEvents,
     totalIn,
     totalOut,
     currentInside,
+    loading,
     changePercents,
     insights,
     lastUpdatedAt,
     clientPollingEnabled,
     error,
     reload,
-    filterMode,
-    setFilterMode,
     filterFrom,
-    setFilterFrom,
     filterTo,
-    setFilterTo,
+    filterFromDateTime,
+    filterToDateTime,
+    periodType,
+    setPeriodType,
+    selectedDay,
+    setSelectedDay,
+    fromTime,
+    handleFromTimeChange,
+    toTime,
+    handleToTimeChange,
+    fromMonth,
+    handleFromMonthChange,
+    toMonth,
+    handleToMonthChange,
+    fromYear,
+    handleFromYearChange,
+    toYear,
+    handleToYearChange,
+    appliedSummaryLabel,
+    applyPeriod,
+    isSingleDayView,
+    isCurrentDayView,
+    isLivePeriod,
   } = useStats();
   const [isResettingDaily, setIsResettingDaily] = useState(false);
 
@@ -50,46 +69,26 @@ export default function DashboardPage() {
   const rangeOut = daily.map((r) => r.total_out);
 
   // Decide which data to use for charts
-  const isToday = filterMode === "today";
-  const chartLineLabels = isToday ? hourlyData.labels : rangeLabels;
-  const chartLineData = isToday
+  const chartLineLabels = isSingleDayView ? hourlyData.labels : rangeLabels;
+  const chartLineData = isSingleDayView
     ? hourlyData.data
     : daily.map((r) => r.total_events);
-  const barLabels = isToday ? hourlyData.labels : rangeLabels;
-  const barIn = isToday
+  const barLabels = isSingleDayView ? hourlyData.labels : rangeLabels;
+  const barIn = isSingleDayView
     ? daily.map((r) => r.total_in)
     : rangeIn;
-  const barOut = isToday
+  const barOut = isSingleDayView
     ? daily.map((r) => r.total_out)
     : rangeOut;
-  const barChartLabels = isToday && daily.length > 0
+  const barChartLabels = isSingleDayView && daily.length > 0
     ? daily.map((r) => r.camera_id ? `Cam ${r.camera_id}` : r.stat_date || "-")
     : barLabels;
 
   // Active cameras count
   const activeCameras = new Set(daily.map((r) => r.camera_id).filter(Boolean)).size;
 
-  // ---- Computed data for new charts ----
-
-  // Time segment distribution (Pagi/Siang/Sore/Malam) for PolarArea
-  const timeSegments = useMemo(() => {
-    const segments = { "Pagi (06-11)": 0, "Siang (11-14)": 0, "Sore (14-18)": 0, "Malam (18-06)": 0 };
-    if (hourlyData && hourlyData.labels) {
-      hourlyData.labels.forEach((label, i) => {
-        const h = parseInt(label.slice(0, 2), 10);
-        const v = hourlyData.data[i] || 0;
-        if (h >= 6 && h < 11) segments["Pagi (06-11)"] += v;
-        else if (h >= 11 && h < 14) segments["Siang (11-14)"] += v;
-        else if (h >= 14 && h < 18) segments["Sore (14-18)"] += v;
-        else segments["Malam (18-06)"] += v;
-      });
-    }
-    return { labels: Object.keys(segments), data: Object.values(segments) };
-  }, [hourlyData]);
-
   // Radar chart: hourly pattern for in vs out (use hourly buckets)
-  // Since we only have total per hour from perSecond, approximate 50/50 for radar demo
-  // or use daily in/out ratios
+  // Since we only have total per hour from per-second buckets, approximate by in/out ratio.
   const radarData = useMemo(() => {
     if (!hourlyData || !hourlyData.labels) return { labels: [], dataIn: [], dataOut: [] };
     const ratio = totalEvents > 0 ? totalIn / totalEvents : 0.5;
@@ -157,14 +156,20 @@ export default function DashboardPage() {
               <h1 className="text-2xl font-extrabold text-base-content tracking-tight">
                 Dashboard Pengunjung
               </h1>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-success/10 text-success text-xs font-bold">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
+              {isLivePeriod ? (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-success/10 text-success text-xs font-bold">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
+                  </span>
+                  Live
                 </span>
-                Live
-              </span>
-              {clientPollingEnabled === false && (
+              ) : (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-base-200 px-3 py-1 text-xs font-bold text-base-content/70">
+                  Arsip
+                </span>
+              )}
+              {isLivePeriod && clientPollingEnabled === false && (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-warning/10 px-3 py-1 text-xs font-bold text-warning">
                   Auto Refresh Off
                 </span>
@@ -181,6 +186,7 @@ export default function DashboardPage() {
               outline
               size="sm"
               isSubmit={false}
+              loading={loading}
               onClick={reload}
             >
               Muat Ulang
@@ -216,47 +222,58 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
-          <DateFilter
-            filterMode={filterMode}
-            setFilterMode={setFilterMode}
-            filterFrom={filterFrom}
-            setFilterFrom={setFilterFrom}
-            filterTo={filterTo}
-            setFilterTo={setFilterTo}
-            today={today}
-          />
+        <DateFilter
+          periodType={periodType}
+          setPeriodType={setPeriodType}
+          selectedDay={selectedDay}
+          setSelectedDay={setSelectedDay}
+          fromTime={fromTime}
+          handleFromTimeChange={handleFromTimeChange}
+          toTime={toTime}
+          handleToTimeChange={handleToTimeChange}
+          fromMonth={fromMonth}
+          handleFromMonthChange={handleFromMonthChange}
+          toMonth={toMonth}
+          handleToMonthChange={handleToMonthChange}
+          fromYear={fromYear}
+          handleFromYearChange={handleFromYearChange}
+          toYear={toYear}
+          handleToYearChange={handleToYearChange}
+          appliedSummaryLabel={appliedSummaryLabel}
+          applyPeriod={applyPeriod}
+          loading={loading}
+          today={today}
+        />
 
-          {showDevResetTools && (
-            <div className="flex flex-wrap items-center gap-3 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3">
-              <span className="inline-flex items-center rounded-full bg-warning/20 px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.2em] text-warning">
-                Dev Only
-              </span>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-base-content">
-                  Reset harian dashboard
-                </p>
-                <p className="text-xs text-base-content/60">
-                  {resetTargetDay
-                    ? `Hapus data visitor untuk ${resetTargetDay}.`
-                    : "Pilih tepat satu hari agar reset harian bisa dijalankan."}
-                </p>
-              </div>
-              <Button
-                variant="warning"
-                size="sm"
-                outline
-                isSubmit={false}
-                loading={isResettingDaily}
-                disabled={!resetTargetDay}
-                onClick={handleResetDaily}
-                className="ml-auto"
-              >
-                Reset Harian
-              </Button>
+        {showDevResetTools && (
+          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3">
+            <span className="inline-flex items-center rounded-full bg-warning/20 px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.2em] text-warning">
+              Dev Only
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-base-content">
+                Reset harian dashboard
+              </p>
+              <p className="text-xs text-base-content/60">
+                {resetTargetDay
+                  ? `Hapus data visitor untuk ${resetTargetDay}.`
+                  : "Pilih tepat satu hari agar reset harian bisa dijalankan."}
+              </p>
             </div>
-          )}
-        </div>
+            <Button
+              variant="warning"
+              size="sm"
+              outline
+              isSubmit={false}
+              loading={isResettingDaily}
+              disabled={!resetTargetDay}
+              onClick={handleResetDaily}
+              className="ml-auto"
+            >
+              Reset Harian
+            </Button>
+          </div>
+        )}
       </div>
 
       {error && <Alert variant="error">{error}</Alert>}
@@ -269,7 +286,7 @@ export default function DashboardPage() {
         totalOut={totalOut}
         currentInside={currentInside}
         changePercents={changePercents}
-        hiddenKeys={isToday ? ["totalEvents"] : ["totalEvents", "currentInside"]}
+        hiddenKeys={isCurrentDayView ? ["totalEvents"] : ["totalEvents", "currentInside"]}
       />
 
     
@@ -281,9 +298,9 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-base-content/80 flex items-center gap-2">
               <span className="w-1 h-5 bg-primary rounded-full"></span>
-              {isToday ? "Tren Pengunjung per Jam" : "Tren Aktivitas per Hari"}
+              {isSingleDayView ? "Tren Pengunjung per Jam" : "Tren Aktivitas per Hari"}
             </h3>
-            {isToday && (
+            {isLivePeriod && (
               <span className="text-[10px] px-2 py-0.5 bg-primary/10 text-primary rounded-full font-bold">
                 LIVE
               </span>
@@ -307,7 +324,7 @@ export default function DashboardPage() {
         <Card className="!shadow-lg">
           <h3 className="font-bold text-base-content/80 mb-4 flex items-center gap-2">
             <span className="w-1 h-5 bg-info rounded-full"></span>
-            Distribusi Masuk  / Keluar
+            Distribusi Masuk / Keluar
           </h3>
           <InOutDoughnutChart totalIn={totalIn} totalOut={totalOut} />
         </Card>
@@ -315,7 +332,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-base-content/80 flex items-center gap-2">
               <span className="w-1 h-5 bg-success rounded-full"></span>
-              Perbandingan Masuk  dan Keluar
+              Perbandingan Masuk dan Keluar
             </h3>
           </div>
           <StackedBarChart
@@ -332,7 +349,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-base-content/80 flex items-center gap-2">
               <span className="w-1 h-5 bg-success rounded-full"></span>
-              Overlay Masuk  vs Keluar
+              Overlay Masuk vs Keluar
             </h3>
           </div>
           <AreaChart labels={barChartLabels} dataIn={barIn} dataOut={barOut} />
@@ -386,6 +403,8 @@ export default function DashboardPage() {
       <ExportSection
         filterFrom={filterFrom}
         filterTo={filterTo}
+        filterFromDateTime={filterFromDateTime}
+        filterToDateTime={filterToDateTime}
         day={day}
         totalEvents={totalEvents}
         totalIn={totalIn}
