@@ -181,13 +181,13 @@ export default function VisitsPage() {
     "Camera",
     "Area",
     "Waktu",
-    "Track ID",
-    "Visitor Key",
+    
+    
     "Tipe",
-    "Pegawai",
+    
     "Arah",
-    "Match Score",
-    "Confidence",
+    
+    
   ];
 
   const eventCameraOptions = [
@@ -244,25 +244,23 @@ export default function VisitsPage() {
     e.camera_id,
     e.area_id,
     new Date(e.event_time).toLocaleString("id-ID"),
-    e.track_id || "-",
-    <span key="vk" className="font-mono text-xs">
-      {e.visitor_key?.substring(0, 16)}...
-    </span>,
+    
+    
     <span
       key="type"
       className={`badge badge-sm ${e.person_type === "EMPLOYEE" ? "badge-warning" : "badge-success"}`}
     >
       {e.person_type || "CUSTOMER"}
     </span>,
-    e.employee_name || (e.employee_id ? `Pegawai #${e.employee_id}` : "-"),
+    
     <span
       key="d"
       className={`badge badge-sm ${e.direction === "IN" ? "badge-success" : e.direction === "OUT" ? "badge-error" : "badge-ghost"}`}
     >
       {e.direction || "-"}
     </span>,
-    e.face_match_score != null ? `${(e.face_match_score * 100).toFixed(1)}%` : "-",
-    e.confidence_avg ? (e.confidence_avg * 100).toFixed(1) + "%" : "-",
+    
+    
   ]);
 
   const visitorColumns = [
