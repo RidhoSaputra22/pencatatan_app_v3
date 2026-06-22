@@ -6,17 +6,14 @@ import { useStats } from "@/hooks/useStats";
 
 import DateFilter from "@/components/dashboard/DateFilter";
 import StatsGrid from "@/components/dashboard/StatsGrid";
-import InsightsPanel from "@/components/dashboard/InsightsPanel";
-import { LineChart, StackedBarChart, InOutDoughnutChart, AreaChart, HorizontalBarChart, RadarChart, PolarAreaChart } from "@/components/dashboard/Charts";
+import { LineChart, StackedBarChart, InOutDoughnutChart, AreaChart, HorizontalBarChart, RadarChart } from "@/components/dashboard/Charts";
 import CameraView from "@/components/dashboard/CameraView";
 import StatsTable from "@/components/dashboard/StatsTable";
 import ExportSection from "@/components/dashboard/ExportSection";
 import Alert from "@/components/ui/Alert";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
-import { formatNumber } from "@/lib/utils";
 import { APP_ENV, ROLE_ADMIN } from "@/lib/constants";
-import CountUp from "react-countup";
 import { useMemo, useState } from "react";
 
 export default function DashboardPage() {
@@ -29,7 +26,6 @@ export default function DashboardPage() {
     perSecond,
     hourlyData,
     totalEvents,
-    uniqueVisitors,
     totalIn,
     totalOut,
     currentInside,
@@ -142,7 +138,7 @@ export default function DashboardPage() {
       showToast(
         "success",
         `${result?.message || `Data visitor untuk ${resetTargetDay} berhasil direset`}. ` +
-          `Event: ${deleted.visit_events ?? 0}, unik: ${deleted.visitor_daily ?? 0}, statistik: ${deleted.daily_stats ?? 0}.`,
+          `Event: ${deleted.visit_events ?? 0}, harian: ${deleted.visitor_daily ?? 0}, statistik: ${deleted.daily_stats ?? 0}.`,
       );
     } catch (err) {
       showToast("error", err.message || "Gagal mereset data visitor harian.");
@@ -269,7 +265,6 @@ export default function DashboardPage() {
       {/* ===== KPI CARDS ===== */}
       <StatsGrid
         totalEvents={totalEvents}
-        uniqueVisitors={uniqueVisitors}
         totalIn={totalIn}
         totalOut={totalOut}
         currentInside={currentInside}
@@ -393,7 +388,6 @@ export default function DashboardPage() {
         filterTo={filterTo}
         day={day}
         totalEvents={totalEvents}
-        uniqueVisitors={uniqueVisitors}
         totalIn={totalIn}
         totalOut={totalOut}
         insights={insights}

@@ -67,7 +67,7 @@ const KPI_CONFIG = [
   {
     key: "totalIn",
     label: "Pengunjung Masuk",
-    sub: "Pengunjung unik periode ini",
+    sub: "Total masuk pada periode ini",
     gradient: "from-success/10 to-success/5",
     borderColor: "border-l-success",
     valueColor: "text-success",

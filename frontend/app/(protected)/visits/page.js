@@ -110,14 +110,11 @@ export default function VisitsPage() {
   const [currentPresenceRows, setCurrentPresenceRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState("events"); // "events" | "visitors" | "current"
+  const [tab, setTab] = useState("events"); // "events" | "current"
   const [eventSearch, setEventSearch] = useState("");
   const [eventTypeFilter, setEventTypeFilter] = useState("ALL");
   const [eventDirectionFilter, setEventDirectionFilter] = useState("ALL");
   const [eventCameraFilter, setEventCameraFilter] = useState("ALL");
-  const [visitorSearch, setVisitorSearch] = useState("");
-  const [visitorNotesFilter, setVisitorNotesFilter] = useState("ALL");
-  const [visitorDateFilter, setVisitorDateFilter] = useState("ALL");
   const [currentSearch, setCurrentSearch] = useState("");
   const [currentCameraFilter, setCurrentCameraFilter] = useState("ALL");
   const yearOptions = useMemo(() => {
@@ -263,62 +260,6 @@ export default function VisitsPage() {
     
   ]);
 
-  const visitorColumns = [
-    "ID",
-    "Tanggal",
-    "Visitor Key",
-    "Pertama Terlihat",
-    "Terakhir Terlihat",
-    "Catatan",
-  ];
-
-  const visitorDateOptions = [
-    { value: "ALL", label: "Semua Tanggal" },
-    ...Array.from(new Set(visitors.map((visitor) => String(visitor.visit_date))))
-      .sort()
-      .map((visitDate) => ({
-        value: visitDate,
-        label: visitDate,
-      })),
-  ];
-  const visitorNotesOptions = [
-    { value: "ALL", label: "Semua Catatan" },
-    { value: "WITH_NOTES", label: "Ada Catatan" },
-    { value: "WITHOUT_NOTES", label: "Tanpa Catatan" },
-  ];
-
-  const normalizedVisitorSearch = visitorSearch.trim().toLowerCase();
-  const filteredVisitors = visitors.filter((visitor) => {
-    const matchesSearch =
-      !normalizedVisitorSearch ||
-      String(visitor.visitor_daily_id).toLowerCase().includes(normalizedVisitorSearch) ||
-      String(visitor.visitor_key || "").toLowerCase().includes(normalizedVisitorSearch) ||
-      String(visitor.notes || "").toLowerCase().includes(normalizedVisitorSearch);
-
-    const hasNotes = Boolean(visitor.notes?.trim());
-    const matchesNotes =
-      visitorNotesFilter === "ALL" ||
-      (visitorNotesFilter === "WITH_NOTES" && hasNotes) ||
-      (visitorNotesFilter === "WITHOUT_NOTES" && !hasNotes);
-
-    const matchesVisitDate =
-      visitorDateFilter === "ALL" ||
-      String(visitor.visit_date) === visitorDateFilter;
-
-    return matchesSearch && matchesNotes && matchesVisitDate;
-  });
-
-  const visitorRows = filteredVisitors.map((v) => [
-    v.visitor_daily_id,
-    v.visit_date,
-    <span key="vk" className="font-mono text-xs">
-      {v.visitor_key?.substring(0, 16)}...
-    </span>,
-    new Date(v.first_seen_at).toLocaleString("id-ID"),
-    new Date(v.last_seen_at).toLocaleString("id-ID"),
-    v.notes || "-",
-  ]);
-
   const currentVisitorColumns = [
     "Menit Snapshot",
     "Visitor Key",
@@ -367,7 +308,6 @@ export default function VisitsPage() {
   ]);
 
   // Calculate stats for StatsGrid
-  const day = appliedPeriod.displayLabel;
   const customerEvents = events.filter((e) => e.person_type !== "EMPLOYEE");
   const ignoredEmployeeEvents = events.filter((e) => e.person_type === "EMPLOYEE").length;
   const uniqueVisitors = visitors.length;
@@ -382,12 +322,6 @@ export default function VisitsPage() {
     setEventTypeFilter("ALL");
     setEventDirectionFilter("ALL");
     setEventCameraFilter("ALL");
-  }
-
-  function resetVisitorFilters() {
-    setVisitorSearch("");
-    setVisitorNotesFilter("ALL");
-    setVisitorDateFilter("ALL");
   }
 
   function resetCurrentFilters() {
@@ -457,7 +391,7 @@ export default function VisitsPage() {
       <div>
         <Heading level={1}>Data Kunjungan</Heading>
         <Paragraph>
-          Lihat data event kunjungan, pengunjung unik, serta histori snapshot per menit untuk pengunjung yang berada di dalam ruangan.
+          Lihat data event kunjungan serta histori snapshot per menit untuk pengunjung yang berada di dalam ruangan.
         </Paragraph>
       </div>
 
@@ -577,12 +511,10 @@ export default function VisitsPage() {
 
       {/* Summary cards */}
       <StatsGrid
-        day={day}
         totalEvents={totalEvents}
-        uniqueVisitors={uniqueVisitors}
         totalIn={totalIn}
         totalOut={totalOut}
-        hiddenKeys={["totalEvents", "uniqueVisitors", "currentInside"]}
+        hiddenKeys={["totalEvents", "currentInside"]}
       />
 
       {/* Tab switch */}
@@ -592,12 +524,6 @@ export default function VisitsPage() {
           onClick={() => setTab("events")}
         >
           Event Kunjungan ({events.length})
-        </button>
-        <button
-          className={`tab ${tab === "visitors" ? "tab-active" : ""}`}
-          onClick={() => setTab("visitors")}
-        >
-          Pengunjung Unik ({visitors.length})
         </button>
         <button
           className={`tab ${tab === "current" ? "tab-active" : ""}`}
@@ -658,54 +584,10 @@ export default function VisitsPage() {
         </Section>
       )}
 
-      {tab === "visitors" && (
-        <Section title={`Pengunjung Unik (${appliedPeriod.displayLabel})`}>
-          <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <Input
-              label="Cari Visitor"
-              value={visitorSearch}
-              onChange={(e) => setVisitorSearch(e.target.value)}
-              placeholder="Visitor key atau catatan"
-            />
-            <Select
-              label="Catatan"
-              options={visitorNotesOptions}
-              value={visitorNotesFilter}
-              onChange={(e) => setVisitorNotesFilter(e.target.value)}
-            />
-            <Select
-              label="Tanggal"
-              options={visitorDateOptions}
-              value={visitorDateFilter}
-              onChange={(e) => setVisitorDateFilter(e.target.value)}
-            />
-            <div className="flex items-end">
-              <Button
-                variant="neutral"
-                outline
-                isSubmit={false}
-                onClick={resetVisitorFilters}
-                className="w-full xl:w-fit"
-              >
-                Reset Filter
-              </Button>
-            </div>
-          </div>
-
-          <div className="mt-4">
-            <Table
-              columns={visitorColumns}
-              rows={visitorRows}
-              emptyText="Belum ada data pengunjung unik pada periode ini."
-            />
-          </div>
-        </Section>
-      )}
-
       {tab === "current" && (
         <Section title={`Histori Pengunjung Di Dalam Ruangan (${appliedPeriod.displayLabel})`}>
           <Alert type="info" className="mt-5">
-            Data pada tab ini diambil dari snapshot database per menit dan mengikuti filter periode di atas. Visitor unik: {currentInside}. Total baris snapshot: {currentPresenceCount}.
+            Data pada tab ini diambil dari snapshot database per menit dan mengikuti filter periode di atas. Jumlah pengunjung terdeteksi: {currentInside}. Total baris snapshot: {currentPresenceCount}.
           </Alert>
 
           <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">

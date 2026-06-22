@@ -57,10 +57,6 @@ export default function StatsTable({ daily = [] }) {
     (sum, row) => sum + Number(row.total_events || 0),
     0,
   );
-  const totalVisitors = filteredDaily.reduce(
-    (sum, row) => sum + Number(row.unique_visitors || 0),
-    0,
-  );
   const totalIn = filteredDaily.reduce(
     (sum, row) => sum + Number(row.total_in || 0),
     0,
@@ -80,7 +76,6 @@ export default function StatsTable({ daily = [] }) {
     "Tanggal",
     "Camera ID",
     "Total Aktivitas",
-    "Pengunjung Unik",
     "Pengunjung Masuk",
     "Pengunjung Keluar",
   ];
@@ -89,7 +84,6 @@ export default function StatsTable({ daily = [] }) {
     r.stat_date,
     r.camera_id,
     r.total_events,
-    <strong key="u">{r.unique_visitors}</strong>,
     r.total_in,
     r.total_out,
   ]);
@@ -111,7 +105,7 @@ export default function StatsTable({ daily = [] }) {
         </p>
 
         {/* Summary mini stats */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 mb-4">
           <div className="bg-primary/5 rounded-lg px-3 py-2.5 text-center">
             <p className="text-lg font-bold text-primary">{formatNumber(totalEvents)}</p>
             <p className="text-[10px] text-base-content/40 font-medium">Total Aktivitas</p>
@@ -123,10 +117,6 @@ export default function StatsTable({ daily = [] }) {
           <div className="bg-error/5 rounded-lg px-3 py-2.5 text-center">
             <p className="text-lg font-bold text-error">{formatNumber(totalOut)}</p>
             <p className="text-[10px] text-base-content/40 font-medium">Total Keluar</p>
-          </div>
-          <div className="bg-info/5 rounded-lg px-3 py-2.5 text-center">
-            <p className="text-lg font-bold text-info">{formatNumber(totalVisitors)}</p>
-            <p className="text-[10px] text-base-content/40 font-medium">Pengunjung Unik</p>
           </div>
         </div>
 

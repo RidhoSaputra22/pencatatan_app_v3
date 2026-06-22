@@ -1,17 +1,10 @@
 "use client";
 
-import { formatNumber } from "@/lib/utils";
-
-export default function InsightsPanel({ insights = {}, totalEvents = 0, uniqueVisitors = 0 }) {
+export default function InsightsPanel({ insights = {} }) {
   const { busyLabel, busyPercent, peakHour, ratio } = insights;
   const hasData = busyLabel || peakHour || ratio;
 
   if (!hasData) return null;
-
-  // Compute occupancy rate (unique vs total)
-  const occupancyRate = totalEvents > 0
-    ? Math.round((uniqueVisitors / totalEvents) * 100)
-    : 0;
 
   const insightItems = [
     busyLabel && busyPercent !== null && {
@@ -60,26 +53,6 @@ export default function InsightsPanel({ insights = {}, totalEvents = 0, uniqueVi
       color: "text-info",
       bg: "bg-info/10",
       iconBg: "bg-info/20",
-    },
-    totalEvents > 0 && {
-      icon: (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
-        </svg>
-      ),
-      label: "Total Pengunjung",
-      value: formatNumber(totalEvents),
-      sub: (
-        <span className="flex items-center gap-1.5">
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[10px] font-bold">
-            {occupancyRate}%
-          </span>
-          <span>pengunjung unik</span>
-        </span>
-      ),
-      color: "text-primary",
-      bg: "bg-primary/10",
-      iconBg: "bg-primary/20",
     },
   ].filter(Boolean);
 

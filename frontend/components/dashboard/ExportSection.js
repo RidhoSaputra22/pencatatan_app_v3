@@ -36,7 +36,6 @@ export default function ExportSection({
   filterTo,
   day,
   totalEvents = 0,
-  uniqueVisitors = 0,
   totalIn = 0,
   totalOut = 0,
   insights = {},
@@ -92,11 +91,6 @@ export default function ExportSection({
         label: "Total Aktivitas",
         value: formatNumber(totalEvents),
         tone: "#2563eb",
-      },
-      {
-        label: "Pengunjung Unik",
-        value: formatNumber(uniqueVisitors),
-        tone: "#0891b2",
       },
       {
         label: "Masuk Unik",
