@@ -2,7 +2,7 @@
 Edge Worker untuk Visitor Monitoring
 - Deteksi manusia menggunakan YOLOv5
 - Tracking dengan CentroidTracker / DeepSORT
-- Menghitung pengunjung unik harian (visitor_key)
+- Menghitung pengunjung  harian (visitor_key)
 - Mengirim event ke backend API
 - Menyediakan live video feed WebRTC ke browser dengan MJPEG fallback
 

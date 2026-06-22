@@ -80,7 +80,7 @@ class Employee(SQLModel, table=True):
 
 class VisitorDaily(SQLModel, table=True):
     """
-    Tabel visitor_daily untuk pengunjung unik harian
+    Tabel visitor_daily untuk pengunjung  harian
     Aturan: masuk berkali-kali dalam sehari tetap dihitung 1
     """
     __tablename__ = "visitor_daily"

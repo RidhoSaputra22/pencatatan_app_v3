@@ -7,7 +7,7 @@ Sistem monitoring jumlah pengunjung perpustakaan berbasis CCTV dengan YOLOv5 + t
 - Deteksi manusia menggunakan **YOLOv5**
 - **Tracking** (ByteTrack / DeepSORT / Centroid Tracker)
 - **Penyaringan pegawai** dengan face recognition berbasis InsightFace/ArcFace
-- **Pengunjung Unik Harian** (masuk 2-3 kali dalam sehari tetap dihitung 1 kali)
+- **Pengunjung  Harian** (masuk 2-3 kali dalam sehari tetap dihitung 1 kali)
 - **Backup footage hasil YOLO** otomatis per segmen 10 menit
 - **Dashboard** dengan statistik real-time + live camera preview
 - Filter per tanggal/periode
@@ -213,7 +213,7 @@ Sesuai dengan konsep proyek:
 3. **cameras** - Konfigurasi kamera
 4. **counting_areas** - Area ROI per kamera
 5. **employees** - Registry pegawai + embedding wajah referensi
-6. **visitor_daily** - Pengunjung unik harian pelanggan
+6. **visitor_daily** - Pengunjung  harian pelanggan
 7. **visit_events** - Log event kunjungan + klasifikasi CUSTOMER/EMPLOYEE
 8. **daily_stats** - Statistik harian pelanggan (pegawai diabaikan)
 
@@ -233,15 +233,15 @@ Catatan implementasi:
 - Project ini memakai edge worker Python tunggal, jadi deteksi wajah dan embedding ArcFace disatukan lewat `InsightFace` agar sesuai dengan struktur repo yang sudah ada.
 - Jika registry pegawai belum diisi, sistem tetap berjalan dan semua orang diperlakukan sebagai pelanggan.
 
-## Logika Pengunjung Unik Harian
+## Logika Pengunjung  Harian
 
 ```
 visitor_key = hash(camera_id + track_id + tanggal)
 
 Saat ada event:
 1. Cek (visit_date, visitor_key) di visitor_daily
-2. Jika BELUM ADA → insert (unik bertambah)
-3. Jika SUDAH ADA → update last_seen_at (unik tidak bertambah)
+2. Jika BELUM ADA → insert ( bertambah)
+3. Jika SUDAH ADA → update last_seen_at ( tidak bertambah)
 ```
 
 ## API Endpoints
@@ -281,7 +281,7 @@ Saat ada event:
 
 Dashboard menampilkan:
 - Total event kunjungan
-- **Pengunjung unik harian** (highlight)
+- **Pengunjung  harian** (highlight)
 - Total masuk/keluar
 - Live camera preview
 - Tabel statistik per kamera

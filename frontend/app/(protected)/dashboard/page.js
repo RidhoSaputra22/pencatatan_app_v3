@@ -307,7 +307,7 @@ export default function DashboardPage() {
         <Card className="!shadow-lg">
           <h3 className="font-bold text-base-content/80 mb-4 flex items-center gap-2">
             <span className="w-1 h-5 bg-info rounded-full"></span>
-            Distribusi Masuk Unik / Keluar
+            Distribusi Masuk  / Keluar
           </h3>
           <InOutDoughnutChart totalIn={totalIn} totalOut={totalOut} />
         </Card>
@@ -315,7 +315,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-base-content/80 flex items-center gap-2">
               <span className="w-1 h-5 bg-success rounded-full"></span>
-              Perbandingan Masuk Unik dan Keluar
+              Perbandingan Masuk  dan Keluar
             </h3>
           </div>
           <StackedBarChart
@@ -332,7 +332,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-base-content/80 flex items-center gap-2">
               <span className="w-1 h-5 bg-success rounded-full"></span>
-              Overlay Masuk Unik vs Keluar
+              Overlay Masuk  vs Keluar
             </h3>
           </div>
           <AreaChart labels={barChartLabels} dataIn={barIn} dataOut={barOut} />

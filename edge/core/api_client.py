@@ -12,7 +12,7 @@ log = get_logger("api")
 
 def generate_visitor_key(camera_id: int, track_id: int, date_str: str) -> str:
     """
-    Generate visitor_key untuk identifikasi pengunjung unik (fallback).
+    Generate visitor_key untuk identifikasi pengunjung  (fallback).
     Format: hash dari camera_id + track_id + date
     Untuk lebih akurat, gunakan generate_visitor_key_from_embedding.
     """

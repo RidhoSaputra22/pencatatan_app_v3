@@ -93,7 +93,7 @@ export default function ExportSection({
         tone: "#2563eb",
       },
       {
-        label: "Masuk Unik",
+        label: "Masuk ",
         value: formatNumber(totalIn),
         tone: "#16a34a",
       },
@@ -117,7 +117,7 @@ export default function ExportSection({
             : "-",
       },
       {
-        label: "Rasio Masuk Unik/Keluar",
+        label: "Rasio Masuk /Keluar",
         value: insights?.ratio || "-",
       },
     ].filter((item) => item.value && item.value !== "-");

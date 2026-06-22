@@ -279,7 +279,7 @@ def serialize_employee(employee: Employee) -> EmployeeOut:
 
 
 def dashboard_total_activity(unique_visitors: int, total_out: int) -> int:
-    """Total aktivitas dashboard = masuk unik + keluar."""
+    """Total aktivitas dashboard = masuk  + keluar."""
     return int(unique_visitors or 0) + int(total_out or 0)
 
 
@@ -1436,10 +1436,10 @@ def delete_counting_area(area_id: int, session: Session = Depends(get_session), 
 def ingest_event(payload: EventIn, session: Session = Depends(get_session)):
     """
     Endpoint untuk menerima event kunjungan dari edge worker.
-    Logika pengunjung unik harian:
+    Logika pengunjung  harian:
     - Cek apakah (visit_date, visitor_key) sudah ada di visitor_daily
-    - Jika belum ada → insert visitor_daily (unik bertambah)
-    - Jika sudah ada → update last_seen_at saja (unik tidak bertambah)
+    - Jika belum ada → insert visitor_daily ( bertambah)
+    - Jika sudah ada → update last_seen_at saja ( tidak bertambah)
     """
     # Get default area if not specified
     area_id = payload.area_id
@@ -1544,7 +1544,7 @@ def ingest_event(payload: EventIn, session: Session = Depends(get_session)):
     
     if is_new_unique:
         stats.unique_visitors += 1
-    # Statistik "masuk" di dashboard mengikuti pengunjung unik harian,
+    # Statistik "masuk" di dashboard mengikuti pengunjung  harian,
     # bukan jumlah event IN berulang dari orang yang sama.
     stats.total_in = stats.unique_visitors
     if payload.direction == "OUT":
@@ -1659,7 +1659,7 @@ def report_csv(
     
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(["Tanggal", "Camera ID", "Total Aktivitas", "Pengunjung Unik", "Masuk Unik", "Keluar"])
+    writer.writerow(["Tanggal", "Camera ID", "Total Aktivitas", "Pengunjung ", "Masuk ", "Keluar"])
     
     q = select(DailyStats).where(
         DailyStats.stat_date >= from_day, 
@@ -2010,7 +2010,7 @@ def stats_per_second(
     session: Session = Depends(get_session),
     _: User = Depends(require_role("ADMIN", "OPERATOR"))
 ):
-    """Statistik aktivitas per detik: masuk unik + keluar."""
+    """Statistik aktivitas per detik: masuk  + keluar."""
     day_str = day.isoformat()
 
     params = {"day_start": f"{day_str} 00:00:00", "day_end": f"{day_str} 23:59:59"}

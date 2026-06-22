@@ -52,7 +52,7 @@ const KPI_CONFIG = [
   {
     key: "totalEvents",
     label: "Total Aktivitas",
-    sub: "Masuk unik + keluar",
+    sub: "Masuk  + keluar",
     gradient: "from-primary/10 to-primary/5",
     borderColor: "border-l-primary",
     valueColor: "text-primary",

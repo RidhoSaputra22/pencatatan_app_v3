@@ -2,7 +2,7 @@
 applyTo: '**'
 ---
 
-Berikut **konsep proyek** dan **skema database sederhana** yang sesuai dengan proposal + use case pada gambar (fokus: monitoring jumlah pengunjung & pengunjung unik harian dengan YOLOv5 + tracking).
+Berikut **konsep proyek** dan **skema database sederhana** yang sesuai dengan proposal + use case pada gambar (fokus: monitoring jumlah pengunjung & pengunjung  harian dengan YOLOv5 + tracking).
 
 ---
 
@@ -14,7 +14,7 @@ Membangun sistem **monitoring jumlah pengunjung perpustakaan** berbasis **CCTV**
 
 * Mendeteksi manusia menggunakan **YOLOv5**
 * Melakukan **tracking** agar tidak menghitung orang yang sama berkali-kali dalam satu kejadian
-* Menghitung **Pengunjung Unik Harian** (orang yang sama masuk 2–3 kali dalam sehari tetap dihitung **1 kali**)
+* Menghitung **Pengunjung  Harian** (orang yang sama masuk 2–3 kali dalam sehari tetap dihitung **1 kali**)
 * Menyajikan **dashboard**, statistik, filter per tanggal/periode, serta **ekspor/cetak laporan**
 
 ### Alur Sistem Tingkat Tinggi
@@ -22,14 +22,14 @@ Membangun sistem **monitoring jumlah pengunjung perpustakaan** berbasis **CCTV**
 1. **Kamera CCTV** mengirim stream ke modul **Edge/AI** (PC lokal/NVR/mini PC).
 2. Modul **YOLOv5** mendeteksi manusia → modul **Tracking** (mis. SORT/DeepSORT/ByteTrack) memberi `track_id`.
 3. Jika objek melewati **Area Hitung/ROI** (konfigurasi kamera), sistem membuat **event kunjungan**.
-4. Untuk “unik harian”:
+4. Untuk “ harian”:
 
    * Sistem membuat `visitor_key` (identitas anonim) berdasarkan hasil tracking + (opsional) ReID embedding.
-   * Saat ada event baru di tanggal yang sama, jika `visitor_key` sudah pernah tercatat → **tidak menambah unik**, hanya menambah total event bila perlu.
+   * Saat ada event baru di tanggal yang sama, jika `visitor_key` sudah pernah tercatat → **tidak menambah **, hanya menambah total event bila perlu.
 5. Backend menyimpan data, Dashboard menampilkan:
 
    * Total pengunjung (event)
-   * Pengunjung unik harian
+   * Pengunjung  harian
    * Statistik per jam/hari/periode
    * Ekspor PDF/Excel (opsional)
 
@@ -79,7 +79,7 @@ Membangun sistem **monitoring jumlah pengunjung perpustakaan** berbasis **CCTV**
 * `direction_mode` (optional: IN/OUT/BOTH)
 * `is_active`
 
-5. **visitor_daily** (kunci unik per hari — untuk aturan “masuk 3x tetap 1”)
+5. **visitor_daily** (kunci  per hari — untuk aturan “masuk 3x tetap 1”)
 
 * `visitor_daily_id` (PK)
 * `visit_date` (DATE)
@@ -96,7 +96,7 @@ Membangun sistem **monitoring jumlah pengunjung perpustakaan** berbasis **CCTV**
 * `area_id` (FK → counting_areas)
 * `event_time` (datetime)
 * `track_id` (id tracking dari edge)
-* `visitor_key` (untuk link ke unik harian)
+* `visitor_key` (untuk link ke  harian)
 * `direction` (optional: IN/OUT)
 * `confidence_avg` (optional)
 * `snapshot_path` (optional: bukti gambar)
@@ -106,13 +106,13 @@ Membangun sistem **monitoring jumlah pengunjung perpustakaan** berbasis **CCTV**
 
 * `stat_date` (PK, DATE)
 * `total_events` (jumlah event kunjungan)
-* `unique_visitors` (jumlah unik harian)
+* `unique_visitors` (jumlah  harian)
 * `last_updated_at`
 
 > Dengan `visit_events` + `visitor_daily`, kamu sudah bisa:
 
 * Hitung total pengunjung (event) per periode
-* Hitung unik harian secara konsisten
+* Hitung  harian secara konsisten
 
 ---
 
@@ -192,15 +192,15 @@ CREATE TABLE daily_stats (
 
 ---
 
-## 4) Catatan Penting untuk “Pengunjung Unik Harian”
+## 4) Catatan Penting untuk “Pengunjung  Harian”
 
 Agar sesuai requirement “masuk berkali-kali dalam sehari tetap 1”:
 
 * Saat ada event baru:
 
   * Cek apakah (`visit_date`, `visitor_key`) sudah ada di `visitor_daily`
-  * Jika belum ada → insert `visitor_daily` (unik bertambah)
-  * Jika sudah ada → update `last_seen_at` saja (unik tidak bertambah)
+  * Jika belum ada → insert `visitor_daily` ( bertambah)
+  * Jika sudah ada → update `last_seen_at` saja ( tidak bertambah)
 
 `visitor_key` bisa dibuat dengan pendekatan MVP:
 

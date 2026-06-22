@@ -174,7 +174,7 @@ export default function VisitsPage() {
   }, [appliedPeriod, load]);
 
   const eventColumns = [
-    "ID",
+    
     "Camera",
     "Area",
     "Waktu",
@@ -237,7 +237,7 @@ export default function VisitsPage() {
   });
 
   const eventRows = filteredEvents.map((e) => [
-    e.event_id,
+    
     e.camera_id,
     e.area_id,
     new Date(e.event_time).toLocaleString("id-ID"),
