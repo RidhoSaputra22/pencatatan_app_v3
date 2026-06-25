@@ -344,3 +344,5 @@ def point_in_roi(roi: Optional[List[List[float]]], x: float, y: float) -> bool:
         return True  # ROI not set => whole frame
     poly = np.array(roi, dtype=np.int32)
     return cv2.pointPolygonTest(poly, (float(x), float(y)), False) >= 0
+
+

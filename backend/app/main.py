@@ -1056,6 +1056,8 @@ def login(payload: LoginIn, session: Session = Depends(get_session)):
         raise HTTPException(status_code=401, detail="User is inactive")
     return TokenOut(access_token=create_access_token(user.username))
 
+
+
 @app.get("/api/me", response_model=UserOut)
 def me(user: User = Depends(require_role("ADMIN", "OPERATOR")), session: Session = Depends(get_session)):
     role = session.get(Role, user.role_id)
@@ -1582,6 +1584,8 @@ def update_counting_area(area_id: int, payload: CountingAreaUpdate, session: Ses
         is_active=area.is_active
     )
 
+
+
 @app.delete("/api/areas/{area_id}")
 def delete_counting_area(area_id: int, session: Session = Depends(get_session), _: User = Depends(require_role("ADMIN"))):
     """Delete counting area (admin only)"""
@@ -1600,10 +1604,6 @@ def delete_counting_area(area_id: int, session: Session = Depends(get_session), 
 def ingest_event(payload: EventIn, session: Session = Depends(get_session)):
     """
     Endpoint untuk menerima event kunjungan dari edge worker.
-    Logika pengunjung  harian:
-    - Cek apakah (visit_date, visitor_key) sudah ada di visitor_daily
-    - Jika belum ada → insert visitor_daily ( bertambah)
-    - Jika sudah ada → update last_seen_at saja ( tidak bertambah)
     """
     # Get default area if not specified
     area_id = payload.area_id
