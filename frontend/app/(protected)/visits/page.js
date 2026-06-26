@@ -536,43 +536,7 @@ export default function VisitsPage() {
       {/* Tables */}
       {tab === "events" && (
         <Section title={`Event Kunjungan (${appliedPeriod.displayLabel})`}>
-          <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
-            <Input
-              label="Cari Event"
-              value={eventSearch}
-              onChange={(e) => setEventSearch(e.target.value)}
-              placeholder="ID, visitor key, pegawai, kamera"
-            />
-            <Select
-              label="Tipe Orang"
-              options={eventTypeOptions}
-              value={eventTypeFilter}
-              onChange={(e) => setEventTypeFilter(e.target.value)}
-            />
-            <Select
-              label="Arah"
-              options={eventDirectionOptions}
-              value={eventDirectionFilter}
-              onChange={(e) => setEventDirectionFilter(e.target.value)}
-            />
-            <Select
-              label="Kamera"
-              options={eventCameraOptions}
-              value={eventCameraFilter}
-              onChange={(e) => setEventCameraFilter(e.target.value)}
-            />
-            <div className="flex items-end">
-              <Button
-                variant="neutral"
-                outline
-                isSubmit={false}
-                onClick={resetEventFilters}
-                className="w-full xl:w-fit"
-              >
-                Reset Filter
-              </Button>
-            </div>
-          </div>
+          
 
           <div className="mt-4">
             <Table

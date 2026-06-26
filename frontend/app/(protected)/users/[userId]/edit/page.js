@@ -36,7 +36,7 @@ export default function EditUserPage() {
         );
 
         if (!currentUser) {
-          setError("Pengguna yang ingin diedit tidak ditemukan.");
+          setError("Admin yang ingin diedit tidak ditemukan.");
           setSelectedUser(null);
           return;
         }
@@ -44,7 +44,7 @@ export default function EditUserPage() {
         setSelectedUser(currentUser);
       } catch (e) {
         if (!active) return;
-        setError(e.message || "Gagal memuat data pengguna.");
+        setError(e.message || "Gagal memuat data admin.");
         setSelectedUser(null);
       } finally {
         if (active) {
@@ -62,7 +62,7 @@ export default function EditUserPage() {
   if (user?.role !== "ADMIN") {
     return (
       <>
-        <Heading level={1}>Edit Pengguna</Heading>
+        <Heading level={1}>Edit Admin</Heading>
         <Alert variant="error">
           Hanya Admin yang bisa mengakses halaman ini.
         </Alert>
@@ -71,16 +71,16 @@ export default function EditUserPage() {
   }
 
   if (loading) {
-    return <LoadingSpinner text="Memuat data pengguna..." />;
+    return <LoadingSpinner text="Memuat data admin..." />;
   }
 
   return (
     <>
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <Heading level={1}>Edit Pengguna</Heading>
+          <Heading level={1}>Edit Admin</Heading>
           <Paragraph>
-            Perbarui informasi akun pengguna yang dipilih.
+            Perbarui informasi akun admin yang dipilih.
           </Paragraph>
         </div>
         <Link href="/users" className="btn btn-ghost w-fit">

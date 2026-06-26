@@ -200,7 +200,7 @@ export default function Sidebar({ mobileOpen = false, setMobileOpen }) {
           [
             navLink("/camera", "Kamera", <CameraIcon />),
             navLink("/employees", "Pegawai", <EmployeesIcon />),
-            navLink("/users", "Pengguna", <UsersIcon />),
+            navLink("/users", "Admin", <UsersIcon />),
           ],
         )}
       {isAdmin &&

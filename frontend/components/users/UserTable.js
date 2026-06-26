@@ -110,7 +110,7 @@ export default function UserTable({ users = [], onDelete }) {
     <>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <Stat
-            title="Total Pengguna"
+            title="Total Admin"
             value={formatNumber(totalUsers)}
             description="Seluruh akun yang terdaftar"
             tone="primary"
@@ -138,11 +138,11 @@ export default function UserTable({ users = [], onDelete }) {
             tone="neutral"
           />
         </div>
-      <Section title="Daftar Pengguna">
+      <Section title="Daftar Admin">
 
         <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Input
-            label="Cari Pengguna"
+            label="Cari Admin"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Username atau nama lengkap"
@@ -175,7 +175,7 @@ export default function UserTable({ users = [], onDelete }) {
           <Table
             columns={columns}
             rows={rows}
-            emptyText="Belum ada pengguna."
+            emptyText="Belum ada admin."
           />
         </div>
       </Section>

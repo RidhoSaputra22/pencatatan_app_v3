@@ -33,9 +33,9 @@ Membangun sistem **monitoring jumlah pengunjung perpustakaan** berbasis **CCTV**
    * Statistik per jam/hari/periode
    * Ekspor PDF/Excel (opsional)
 
-### Peran Pengguna
+### Peran Admin
 
-* **Admin**: login, kelola pengguna, konfigurasi kamera & area hitung, kelola data kunjungan.
+* **Admin**: login, kelola admin, konfigurasi kamera & area hitung, kelola data kunjungan.
 * **Petugas/Operator**: login, monitoring dashboard, lihat statistik, filter periode, ekspor/cetak laporan.
 
 ---

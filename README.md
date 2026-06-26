@@ -208,8 +208,8 @@ Konfigurasi utama:
 
 Sesuai dengan konsep proyek:
 
-1. **roles** - Role pengguna (ADMIN, OPERATOR)
-2. **users** - Data pengguna
+1. **roles** - Role admin (ADMIN, OPERATOR)
+2. **users** - Data admin
 3. **cameras** - Konfigurasi kamera
 4. **counting_areas** - Area ROI per kamera
 5. **employees** - Registry pegawai + embedding wajah referensi

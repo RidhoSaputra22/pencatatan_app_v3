@@ -18,7 +18,7 @@ export function useUsers() {
       const data = await fetchUsers();
       setUsers(data);
     } catch (e) {
-      setError(e.message || "Gagal memuat data pengguna");
+      setError(e.message || "Gagal memuat data admin");
     } finally {
       setLoading(false);
     }

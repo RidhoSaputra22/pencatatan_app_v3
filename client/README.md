@@ -22,7 +22,7 @@ LOCAL (Client)                          SERVER
 pip install -r requirements.txt
 ```
 
-## Penggunaan
+## Adminan
 
 ```bash
 # Dari webcam (index 0)

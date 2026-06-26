@@ -17,7 +17,7 @@ export default function UsersPage() {
   if (user?.role !== "ADMIN") {
     return (
       <>
-        <Heading level={1}>Kelola Pengguna</Heading>
+        <Heading level={1}>Kelola Admin</Heading>
         <Alert variant="error">
           Hanya Admin yang bisa mengakses halaman ini.
         </Alert>
@@ -26,20 +26,20 @@ export default function UsersPage() {
   }
 
   if (loading) {
-    return <LoadingSpinner text="Memuat data pengguna..." />;
+    return <LoadingSpinner text="Memuat data admin..." />;
   }
   return (
     <>
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <Heading level={1}>Kelola Pengguna</Heading>
+          <Heading level={1}>Kelola Admin</Heading>
           <Paragraph>
-            Kelola daftar pengguna sistem. Jumlah pengguna:{" "}
+            Kelola daftar admin sistem. Jumlah admin:{" "}
             <strong>{users.length}</strong>
           </Paragraph>
         </div>
         <Link href="/users/create" className="btn btn-primary w-fit">
-          Tambah Pengguna
+          Tambah Admin
         </Link>
       </div>
 

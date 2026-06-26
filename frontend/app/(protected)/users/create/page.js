@@ -16,7 +16,7 @@ export default function CreateUserPage() {
   if (user?.role !== "ADMIN") {
     return (
       <>
-        <Heading level={1}>Tambah Pengguna</Heading>
+        <Heading level={1}>Tambah Admin</Heading>
         <Alert variant="error">
           Hanya Admin yang bisa mengakses halaman ini.
         </Alert>
@@ -28,7 +28,7 @@ export default function CreateUserPage() {
     <>
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <Heading level={1}>Tambah Pengguna</Heading>
+          <Heading level={1}>Tambah Admin</Heading>
           <Paragraph>
             Buat akun baru untuk admin atau operator sistem.
           </Paragraph>

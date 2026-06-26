@@ -65,7 +65,7 @@ export default function UserForm({ onCreated, user, onSaved, onCancel }) {
   }
 
   return (
-    <Section title={isEdit ? "Edit Pengguna" : "Tambah Pengguna Baru"}>
+    <Section title={isEdit ? "Edit Admin" : "Tambah Admin Baru"}>
       <form onSubmit={handleSubmit} className="grid gap-4">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <Input
